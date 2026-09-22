@@ -44,6 +44,15 @@ dependencies = [
     "mcp>=1.9.4",
     "langchain-aws>=0.2.28",
     "pandas>=2.3.1",
+    "sqlalchemy>=2.0.41",
+    "scipy>=1.15.3",
+    "mem0ai>=2.0.20",
+    "deepeval>=4.2.3",
+    "chromadb>=1.5.9",
+    "sentence-transformers>=6.1.0",
+    "langchain-postgres>=0.0.18",
+    "psycopg[binary]>=3.3.6",
+    "langchain-huggingface>=1.2.2",
 ]
 
 [project.optional-dependencies]

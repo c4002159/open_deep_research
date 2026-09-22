@@ -1,7 +1,7 @@
 """Graph state definitions and data structures for the Deep Research agent."""
 
 import operator
-from typing import Annotated, Optional
+from typing import Annotated, Literal, Optional
 
 from langchain_core.messages import MessageLikeRepresentation
 from langgraph.graph import MessagesState
@@ -16,6 +16,14 @@ class ConductResearch(BaseModel):
     """Call this tool to conduct research on a specific topic."""
     research_topic: str = Field(
         description="The topic to research. Should be a single topic, and should be described in high detail (at least a paragraph).",
+    )
+    researcher_type: Literal["general", "data_analyst", "knowledge_base"] = Field(
+        default="general",
+        description=(
+            "... "
+            "Use 'knowledge_base' when the task requires searching internal "
+            "policy/spec/guide documents that are not structured SQL data."
+        ),
     )
 
 class ResearchComplete(BaseModel):
@@ -86,6 +94,7 @@ class ResearcherState(TypedDict):
     researcher_messages: Annotated[list[MessageLikeRepresentation], operator.add]
     tool_call_iterations: int = 0
     research_topic: str
+    researcher_type: Literal["general", "data_analyst", "knowledge_base"] = "general"     
     compressed_research: str
     raw_notes: Annotated[list[str], override_reducer] = []
 

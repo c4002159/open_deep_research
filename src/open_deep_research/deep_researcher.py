@@ -19,26 +19,7 @@ from langgraph.types import Command
 from open_deep_research.configuration import (
     Configuration,
 )
-from open_deep_research.prompts import (
-    clarify_with_user_instructions,
-    compress_research_simple_human_message,
-    compress_research_system_prompt,
-    final_report_generation_prompt,
-    lead_researcher_prompt,
-    research_system_prompt,
-    transform_messages_into_research_topic_prompt,
-)
-from open_deep_research.state import (
-    AgentInputState,
-    AgentState,
-    ClarifyWithUser,
-    ConductResearch,
-    ResearchComplete,
-    ResearcherOutputState,
-    ResearcherState,
-    ResearchQuestion,
-    SupervisorState,
-)
+
 from open_deep_research.utils import (
     anthropic_websearch_called,
     get_all_tools,
@@ -50,6 +31,29 @@ from open_deep_research.utils import (
     openai_websearch_called,
     remove_up_to_last_ai_message,
     think_tool,
+)
+
+from open_deep_research.state import (
+    AgentInputState,
+    AgentState,
+    ClarifyWithUser,
+    ConductResearch,
+    ResearchComplete,
+    ResearcherOutputState,
+    ResearcherState,
+    ResearchQuestion,
+    SupervisorState,
+)
+from open_deep_research.prompts import (
+    clarify_with_user_instructions,
+    compress_research_simple_human_message,
+    compress_research_system_prompt,
+    data_analyst_system_prompt,
+    final_report_generation_prompt,
+    knowledge_base_system_prompt,
+    lead_researcher_prompt,
+    research_system_prompt,
+    transform_messages_into_research_topic_prompt,
 )
 
 # Initialize a configurable model that we will use throughout the agent
@@ -297,7 +301,8 @@ async def supervisor_tools(state: SupervisorState, config: RunnableConfig) -> Co
                     "researcher_messages": [
                         HumanMessage(content=tool_call["args"]["research_topic"])
                     ],
-                    "research_topic": tool_call["args"]["research_topic"]
+                    "research_topic": tool_call["args"]["research_topic"],
+                    "researcher_type": tool_call["args"].get("researcher_type", "general"),   # 新增
                 }, config) 
                 for tool_call in allowed_conduct_research_calls
             ]
@@ -379,9 +384,10 @@ async def researcher(state: ResearcherState, config: RunnableConfig) -> Command[
     # Step 1: Load configuration and validate tool availability
     configurable = Configuration.from_runnable_config(config)
     researcher_messages = state.get("researcher_messages", [])
+    researcher_type = state.get("researcher_type", "general") 
     
     # Get all available research tools (search, MCP, think_tool)
-    tools = await get_all_tools(config)
+    tools = await get_all_tools(config, researcher_type=researcher_type)
     if len(tools) == 0:
         raise ValueError(
             "No tools found to conduct research: Please configure either your "
@@ -396,11 +402,16 @@ async def researcher(state: ResearcherState, config: RunnableConfig) -> Command[
         "tags": ["langsmith:nostream"]
     }
     
-    # Prepare system prompt with MCP context if available
-    researcher_prompt = research_system_prompt.format(
-        mcp_prompt=configurable.mcp_prompt or "", 
-        date=get_today_str()
-    )
+    # Prepare system prompt based on researcher type
+    if researcher_type == "data_analyst":
+       researcher_prompt = data_analyst_system_prompt.format(date=get_today_str())
+    elif researcher_type == "knowledge_base":
+       researcher_prompt = knowledge_base_system_prompt.format(date=get_today_str())
+    else:
+        researcher_prompt = research_system_prompt.format(
+            mcp_prompt=configurable.mcp_prompt or "",
+            date=get_today_str()
+        )
     
     # Configure model with tools, retry logic, and settings
     research_model = (
@@ -464,7 +475,8 @@ async def researcher_tools(state: ResearcherState, config: RunnableConfig) -> Co
         return Command(goto="compress_research")
     
     # Step 2: Handle other tool calls (search, MCP tools, etc.)
-    tools = await get_all_tools(config)
+    researcher_type = state.get("researcher_type", "general") 
+    tools = await get_all_tools(config, researcher_type=researcher_type)
     tools_by_name = {
         tool.name if hasattr(tool, "name") else tool.get("name", "web_search"): tool 
         for tool in tools

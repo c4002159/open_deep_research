@@ -231,6 +231,53 @@ class Configuration(BaseModel):
             }
         }
     )
+    internal_db_url: Optional[str] = Field(
+        default=None,
+        optional=True,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "text",
+                "description": (
+                    "Connection string for the internal database that the "
+                    "data_analyst researcher queries. Use a read-only "
+                    "database user for safety."
+                )
+            }
+        }
+    )
+    
+    mem0_api_key: Optional[str] = Field(
+        default=None,
+        optional=True,
+        metadata={
+            "x_oap_ui_config": {
+                "type": "text",
+                "description": "API key for the Mem0 Platform (cross-session long-term memory)."
+            }
+        }
+    )
+    mem0_user_id: str = Field(
+        default="default_user",
+        metadata={
+            "x_oap_ui_config": {
+                "type": "text",
+                "description": (
+                    "User id that memories are scoped to. This is a single-user "
+                    "demo project so a fixed value is fine; a real multi-user "
+                    "deployment would derive this per authenticated end user."
+                )
+            }
+        }
+    )
+    postgres_connection_string: str = Field(
+        default="postgresql+psycopg://langchain:langchain@localhost:6024/langchain",
+        metadata={
+            "x_oap_ui_config": {
+                "type": "text",
+                "description": "PostgreSQL(pgvector)连接串，格式为 postgresql+psycopg://user:pass@host:port/db"
+            }
+        }
+    )
 
 
     @classmethod
