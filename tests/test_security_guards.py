@@ -159,3 +159,34 @@ def test_container_boundary_without_python_level_restrictions(name, payload, mus
                         execution_timeout=30, runtime_configs=DOCKER_RUNTIME_CONFIGS) as s:
         r = s.run(payload)
     assert must_not_contain not in (r.stdout or "")
+
+
+# ------------------------------------------------------------ fatal vs fixable denials (stage 3)
+from open_deep_research.policy import is_fatal_denial  # noqa: E402
+
+
+@pytest.mark.parametrize("sql,fatal", [
+    ("DROP TABLE sales", True),
+    ("DELETE FROM sales", True),
+    ("SELECT 1; DROP TABLE sales", True),
+    ("WITH d AS (DELETE FROM sales RETURNING *) SELECT * FROM d", True),
+    ("SELECT 1 -- note", False),                       # fixable: remove the comment
+    ("SELECT zzz_unknown_fn(1)", False),                # fixable: function not allow-listed
+    ("SELECT 1; SELECT 2", False),                     # fixable: send one statement
+])
+def test_sql_denial_fatality(sql, fatal):
+    with pytest.raises(ReadOnlyViolation) as e:
+        validate_readonly_sql(sql, "postgres" if "RETURNING" in sql else "sqlite")
+    assert e.value.fatal is fatal
+
+
+@pytest.mark.parametrize("code,fatal", [
+    ("import os", True),
+    ("open('x')", True),
+    ("x = ().__class__", True),
+    ("import sklearn", False),                          # fixable: use an allowed library
+])
+def test_code_denial_fatality(code, fatal):
+    res = run_python_sandboxed_sync(code, timeout=5, backend="subprocess")
+    assert res.blocked and res.fatal is fatal
+    assert is_fatal_denial(format_for_agent(res)) is fatal

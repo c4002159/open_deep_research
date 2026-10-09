@@ -72,7 +72,7 @@ def db_fingerprint(db_url: Optional[str]) -> Optional[str]:
 # ------------------------------------------------------------------ tracing
 TOOL_ERROR_PREFIXES = (
     "SQL execution error", "Query rejected", "Python execution error", "Python execution blocked",
-    "Error:", "Memory search error", "Memory save error", "Knowledge base search error",
+    "Error:", "[TOOL_UNAVAILABLE]", "Memory search error", "Memory save error", "Knowledge base search error",
 )
 
 

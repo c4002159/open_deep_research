@@ -246,6 +246,55 @@ class Configuration(BaseModel):
         }
     )
     
+    # ---- Reliability & safety (stage 3)
+    tool_timeout_s: float = Field(
+        default=90.0,
+        metadata={"x_oap_ui_config": {"type": "number", "default": 90, "min": 1, "max": 600,
+                                      "description": "Wall-clock timeout for a single tool call."}},
+    )
+    tool_max_retries: int = Field(
+        default=2,
+        metadata={"x_oap_ui_config": {"type": "number", "default": 2, "min": 0, "max": 5,
+                                      "description": "Retries (exponential backoff + jitter) for transient failures of idempotent tools."}},
+    )
+    breaker_failure_threshold: int = Field(
+        default=3,
+        metadata={"x_oap_ui_config": {"type": "number", "default": 3, "min": 1, "max": 50,
+                                      "description": "Consecutive failed calls (after retries) before a tool's circuit opens."}},
+    )
+    breaker_cooldown_s: float = Field(
+        default=15.0,
+        metadata={"x_oap_ui_config": {"type": "number", "default": 15, "min": 1, "max": 600,
+                                      "description": "Seconds an open circuit waits before allowing one probe call."}},
+    )
+    fallback_model: Optional[str] = Field(
+        default=None,
+        metadata={"x_oap_ui_config": {"type": "text",
+                                      "description": "Optional backup model (e.g. 'deepseek:deepseek-chat') used when the research model keeps failing with timeouts, rate limits or 5xx errors."}},
+    )
+    enable_request_triage: bool = Field(
+        default=True,
+        metadata={"x_oap_ui_config": {"type": "boolean", "default": True,
+                                      "description": "Refuse requests to modify/delete/export data or override the rules before any research starts (no LLM call)."}},
+    )
+    approval_mode: str = Field(
+        default="interrupt",
+        metadata={"x_oap_ui_config": {"type": "select", "default": "interrupt",
+                                      "options": [{"label": "Pause for human approval", "value": "interrupt"},
+                                                  {"label": "Auto-approve (evals/batch)", "value": "auto_approve"},
+                                                  {"label": "Deny sensitive queries", "value": "deny"}],
+                                      "description": "What to do when a tool call needs human approval (row-level order data)."}},
+    )
+    approval_row_limit: int = Field(
+        default=10,
+        metadata={"x_oap_ui_config": {"type": "number", "default": 10, "min": 1, "max": 200,
+                                      "description": "Row-level queries on the sales table returning more rows than this need approval."}},
+    )
+    approval_log_path: str = Field(
+        default="logs/approvals.jsonl",
+        metadata={"x_oap_ui_config": {"type": "text", "description": "Append-only JSONL audit log of approval decisions."}},
+    )
+
     mem0_api_key: Optional[str] = Field(
         default=None,
         optional=True,

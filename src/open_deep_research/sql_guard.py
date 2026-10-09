@@ -37,7 +37,16 @@ logging.getLogger("sqlglot").setLevel(logging.ERROR)  # parse fallbacks are expe
 
 
 class ReadOnlyViolation(Exception):
-    """Raised when a statement is not a single, side-effect-free SELECT."""
+    """Raised when a statement is not a single, side-effect-free SELECT.
+
+    ``fatal`` is True when the statement tries to change data or schema (the agent
+    must stop, not rephrase) and False for fixable problems such as a disallowed
+    function or a comment.
+    """
+
+    def __init__(self, message: str, fatal: bool = False):
+        super().__init__(message)
+        self.fatal = fatal
 
 
 _DIALECTS = {"sqlite": "sqlite", "postgresql": "postgres", "mysql": "mysql"}
@@ -92,18 +101,18 @@ def validate_readonly_sql(sql: str, dialect: Optional[str] = None) -> str:
         raise ReadOnlyViolation("SQL comments are not allowed")
 
     statements = [s for s in statements if s is not None]
+    non_select = [s for s in statements if not isinstance(s, (exp.Select, exp.SetOperation))]
+    if non_select:
+        raise ReadOnlyViolation(
+            f"only SELECT statements are allowed, got {type(non_select[0]).__name__.upper()}", fatal=True
+        )
     if len(statements) != 1:
         raise ReadOnlyViolation("exactly one statement is allowed (no ';' chaining)")
 
     root = statements[0]
-    if not isinstance(root, (exp.Select, exp.SetOperation)):
-        raise ReadOnlyViolation(
-            f"only SELECT statements are allowed, got {type(root).__name__.upper()}"
-        )
-
     for node in root.walk():
         if isinstance(node, _FORBIDDEN_NODES):
-            raise ReadOnlyViolation(f"{type(node).__name__.upper()} is not allowed in a read-only query")
+            raise ReadOnlyViolation(f"{type(node).__name__.upper()} is not allowed in a read-only query", fatal=True)
         if isinstance(node, exp.Anonymous) and node.name.lower() not in _SAFE_ANONYMOUS_FUNCTIONS:
             raise ReadOnlyViolation(f"function '{node.name}' is not allowed")
 

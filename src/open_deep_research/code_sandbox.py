@@ -32,6 +32,8 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
+from open_deep_research.policy import fatal_denial
+
 logger = logging.getLogger(__name__)
 
 SENTINEL = "\x00__SANDBOX_RESULT__\x00"
@@ -71,8 +73,22 @@ DOCKER_RUNTIME_CONFIGS = {
 }
 
 
+DANGEROUS_MODULES = frozenset({
+    "os", "sys", "subprocess", "socket", "shutil", "ctypes", "urllib", "http", "requests",
+    "pickle", "importlib", "builtins", "multiprocessing", "threading", "signal", "pathlib",
+})
+
+
 class CodePolicyViolation(Exception):
-    """Raised when code fails the static policy."""
+    """Raised when code fails the static policy.
+
+    ``fatal`` marks attempts at shell/file/network/introspection access (retrying is
+    pointless); a merely unavailable library is fixable and not fatal.
+    """
+
+    def __init__(self, message: str, fatal: bool = True):
+        super().__init__(message)
+        self.fatal = fatal
 
 
 def check_code_policy(code: str) -> None:
@@ -106,7 +122,8 @@ def _check_module(name: str) -> None:
     root = name.split(".")[0]
     if root not in ALLOWED_IMPORTS:
         raise CodePolicyViolation(
-            f"import of '{root}' is not allowed (allowed: {', '.join(sorted(ALLOWED_IMPORTS))})"
+            f"import of '{root}' is not allowed (allowed: {', '.join(sorted(ALLOWED_IMPORTS))})",
+            fatal=root in DANGEROUS_MODULES,
         )
 
 
@@ -178,6 +195,7 @@ class SandboxResult:
     error: Optional[str] = None
     backend: str = ""
     blocked: bool = False  # rejected by static policy / timeout / limits (not a user-code bug)
+    fatal: bool = False  # blocked for a security reason; retrying cannot help
 
 
 def _parse_output(raw: str, backend: str) -> SandboxResult:
@@ -282,7 +300,8 @@ def run_python_sandboxed_sync(code: str, timeout: float = 20.0, backend: Optiona
     try:
         check_code_policy(code)
     except CodePolicyViolation as e:
-        return SandboxResult(False, error=f"Blocked by sandbox policy: {e}", backend="policy", blocked=True)
+        return SandboxResult(False, error=f"Blocked by sandbox policy: {e}", backend="policy", blocked=True,
+                             fatal=getattr(e, "fatal", True))
     try:
         backend = backend or resolve_backend()
     except RuntimeError as e:
@@ -296,6 +315,8 @@ async def run_python_sandboxed(code: str, timeout: float = 20.0) -> SandboxResul
 
 def format_for_agent(res: SandboxResult) -> str:
     """Render a result in the same shape the old in-process executor returned."""
+    if res.fatal:
+        return fatal_denial(f"Python execution blocked: {res.error}")
     if res.blocked:
         return f"Python execution blocked: {res.error}"
     if not res.ok:

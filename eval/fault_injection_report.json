@@ -1,0 +1,78 @@
+{
+  "A_random_blips_30pct": {
+    "naive": {
+      "calls": 208,
+      "success_when_up": 0.649,
+      "avg_failed_call_s": 5.0,
+      "dependency_attempts": 208,
+      "retries": 0,
+      "fast_fails": 0
+    },
+    "resilient": {
+      "calls": 167,
+      "success_when_up": 0.97,
+      "avg_failed_call_s": 15.43,
+      "dependency_attempts": 238,
+      "retries": 71,
+      "fast_fails": 0
+    }
+  },
+  "B_outage_t100s_to_t300s": {
+    "naive": {
+      "calls": 364,
+      "success_when_up": 1.0,
+      "avg_failed_call_s": 5.0,
+      "dependency_attempts": 364,
+      "retries": 0,
+      "fast_fails": 0
+    },
+    "resilient": {
+      "calls": 453,
+      "success_when_up": 0.985,
+      "avg_failed_call_s": 0.67,
+      "dependency_attempts": 346,
+      "retries": 6,
+      "fast_fails": 113
+    }
+  },
+  "C_flapping_60s_up_60s_down": {
+    "naive": {
+      "calls": 301,
+      "success_when_up": 1.0,
+      "avg_failed_call_s": 5.0,
+      "dependency_attempts": 301,
+      "retries": 0,
+      "fast_fails": 0
+    },
+    "resilient": {
+      "calls": 316,
+      "success_when_up": 0.929,
+      "avg_failed_call_s": 2.96,
+      "dependency_attempts": 281,
+      "retries": 30,
+      "fast_fails": 65
+    }
+  },
+  "D_model_429_30pct": {
+    "naive": {
+      "recovery_rate": 0.67,
+      "fallbacks_used": 0
+    },
+    "resilient": {
+      "recovery_rate": 1.0,
+      "fallbacks_used": 66
+    }
+  },
+  "E_bad_sql_does_not_trip_breaker": {
+    "naive": {
+      "breaker_state": "closed",
+      "short_circuited": 0,
+      "retries": 0
+    },
+    "resilient": {
+      "breaker_state": "closed",
+      "short_circuited": 0,
+      "retries": 0
+    }
+  }
+}

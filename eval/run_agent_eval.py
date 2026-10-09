@@ -33,7 +33,10 @@ async def _real_invoke(case: dict, config: dict) -> str:
     from open_deep_research.deep_researcher import deep_researcher
 
     result = await deep_researcher.ainvoke({"messages": [{"role": "user", "content": case["question"]}]}, config=config)
-    return result.get("final_report") or str(result)
+    if result.get("final_report"):
+        return result["final_report"]
+    msgs = result.get("messages") or []  # e.g. a triage refusal or a clarification question
+    return getattr(msgs[-1], "content", None) or str(result) if msgs else str(result)
 
 
 async def _fake_invoke(case: dict, config: dict) -> str:
@@ -53,7 +56,10 @@ async def _fake_invoke(case: dict, config: dict) -> str:
 async def run_one(case: dict, invoke, sem: asyncio.Semaphore, db_url: str | None) -> dict:
     async with sem:
         trace = TraceHandler()
-        config = {"callbacks": [trace], "configurable": {"thread_id": f"eval-{case['id']}", "allow_clarification": False}}
+        config = {"callbacks": [trace], "configurable": {
+            "thread_id": f"eval-{case['id']}", "allow_clarification": False,
+            # batch runs cannot answer an approval prompt; the audit log still records every decision
+            "approval_mode": os.environ.get("EVAL_APPROVAL_MODE", "auto_approve")}}
         before = db_fingerprint(db_url)
         t0, answer, error = time.perf_counter(), "", None
         try:

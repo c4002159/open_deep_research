@@ -38,6 +38,7 @@ from sqlalchemy import text as sql_text
 
 from open_deep_research.code_sandbox import format_for_agent, run_python_sandboxed
 from open_deep_research.configuration import Configuration, SearchAPI
+from open_deep_research.policy import fatal_denial, is_fatal_denial
 from open_deep_research.sql_guard import ReadOnlyViolation, run_readonly_query
 from open_deep_research.prompts import summarize_webpage_prompt
 from open_deep_research.state import ResearchComplete, Summary
@@ -610,6 +611,8 @@ async def sql_executor(query: str, config: RunnableConfig = None) -> str:
     try:
         columns, rows, truncated = await asyncio.to_thread(run_readonly_query, db_url, query)
     except ReadOnlyViolation as e:
+        if e.fatal:
+            return fatal_denial(f"Query rejected by read-only guard: {e}")
         return (
             f"Query rejected by read-only guard: {e}. "
             "Only a single SELECT statement (CTEs and UNIONs allowed) can be executed; "

@@ -13,13 +13,19 @@ from langchain_core.messages import (
     get_buffer_string,
 )
 from langchain_core.runnables import RunnableConfig
+from langgraph.errors import GraphBubbleUp
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import Command
+from langgraph.types import Command, interrupt
 
 from open_deep_research.configuration import (
     Configuration,
 )
 
+from open_deep_research.model_fallback import ainvoke_with_fallback
+from open_deep_research.approval import approval_reason, audit, decide
+from open_deep_research.request_triage import classify_request, refusal_message
+from open_deep_research.policy import fatal_denial, is_fatal_denial
+from open_deep_research.resilience import ResiliencePolicy, call_with_resilience
 from open_deep_research.utils import (
     anthropic_websearch_called,
     get_all_tools,
@@ -60,6 +66,37 @@ from open_deep_research.prompts import (
 configurable_model = init_chat_model(
     configurable_fields=("model", "max_tokens", "api_key"),
 )
+
+def _build_fallback(tools, configurable, primary_config, config):
+    """Backup model runnable (same tools/retry policy) or None when no fallback is configured."""
+    if not configurable.fallback_model:
+        return None
+    return (
+        configurable_model
+        .bind_tools(tools)
+        .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
+        .with_config({**primary_config,
+                      "model": configurable.fallback_model,
+                      "api_key": get_api_key_for_model(configurable.fallback_model, config)})
+    )
+
+
+async def triage_request(state: AgentState, config: RunnableConfig) -> Command[Literal["clarify_with_user", "__end__"]]:
+    """Refuse requests to modify/export data or override the rules *before* any research starts."""
+    configurable = Configuration.from_runnable_config(config)
+    if not configurable.enable_request_triage:
+        return Command(goto="clarify_with_user")
+    last = state["messages"][-1]
+    text = last.content if isinstance(last.content, str) else str(last.content)
+    reason = classify_request(text)
+    if reason is None:
+        return Command(goto="clarify_with_user")
+    audit(configurable.approval_log_path, {
+        "event": "request_refused_by_triage", "reason": reason, "request": text[:300],
+        "thread_id": str(config.get("configurable", {}).get("thread_id", "")),
+    })
+    return Command(goto=END, update={"messages": [AIMessage(content=refusal_message(reason, text))]})
+
 
 async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Command[Literal["write_research_brief", "__end__"]]:
     """Analyze user messages and ask clarifying questions if the research scope is unclear.
@@ -212,10 +249,11 @@ async def supervisor(state: SupervisorState, config: RunnableConfig) -> Command[
         .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
         .with_config(research_model_config)
     )
+    fallback_model = _build_fallback(lead_researcher_tools, configurable, research_model_config, config)
     
     # Step 2: Generate supervisor response based on current context
     supervisor_messages = state.get("supervisor_messages", [])
-    response = await research_model.ainvoke(supervisor_messages)
+    response = await ainvoke_with_fallback(research_model, fallback_model, supervisor_messages)
     
     # Step 3: Update state and proceed to tool execution
     return Command(
@@ -334,6 +372,8 @@ async def supervisor_tools(state: SupervisorState, config: RunnableConfig) -> Co
             if raw_notes_concat:
                 update_payload["raw_notes"] = [raw_notes_concat]
                 
+        except GraphBubbleUp:
+            raise  # a human-approval pause must reach the graph runtime, not be swallowed below
         except Exception as e:
             # Handle research execution errors
             if is_token_limit_exceeded(e, configurable.research_model) or True:
@@ -420,10 +460,11 @@ async def researcher(state: ResearcherState, config: RunnableConfig) -> Command[
         .with_retry(stop_after_attempt=configurable.max_structured_output_retries)
         .with_config(research_model_config)
     )
+    fallback_model = _build_fallback(tools, configurable, research_model_config, config)
     
     # Step 3: Generate researcher response with system context
     messages = [SystemMessage(content=researcher_prompt)] + researcher_messages
-    response = await research_model.ainvoke(messages)
+    response = await ainvoke_with_fallback(research_model, fallback_model, messages)
     
     # Step 4: Update state and proceed to tool execution
     return Command(
@@ -436,11 +477,16 @@ async def researcher(state: ResearcherState, config: RunnableConfig) -> Command[
 
 # Tool Execution Helper Function
 async def execute_tool_safely(tool, args, config):
-    """Safely execute a tool with error handling."""
-    try:
-        return await tool.ainvoke(args, config)
-    except Exception as e:
-        return f"Error executing tool: {str(e)}"
+    """Run one tool call with timeout, transient-failure retries and a circuit breaker."""
+    configurable = Configuration.from_runnable_config(config)
+    policy = ResiliencePolicy(
+        timeout_s=configurable.tool_timeout_s,
+        max_retries=configurable.tool_max_retries,
+        breaker_threshold=configurable.breaker_failure_threshold,
+        breaker_cooldown_s=configurable.breaker_cooldown_s,
+    )
+    name = getattr(tool, "name", None) or tool.get("name", "unknown")
+    return await call_with_resilience(name, lambda: tool.ainvoke(args, config), policy)
 
 
 async def researcher_tools(state: ResearcherState, config: RunnableConfig) -> Command[Literal["researcher", "compress_research"]]:
@@ -484,10 +530,34 @@ async def researcher_tools(state: ResearcherState, config: RunnableConfig) -> Co
     
     # Execute all tool calls in parallel
     tool_calls = most_recent_message.tool_calls
-    tool_execution_tasks = [
-        execute_tool_safely(tools_by_name[tool_call["name"]], tool_call["args"], config) 
-        for tool_call in tool_calls
+    # Human approval gate: decided for the whole batch *before* any tool runs, so a pause
+    # (interrupt) leaves no side effects and this node can be replayed on resume.
+    pending = [
+        {"tool": tc["name"], "args": tc["args"], "reason": reason, "id": tc["id"]}
+        for tc in tool_calls
+        if (reason := approval_reason(tc["name"], tc["args"], configurable.approval_row_limit))
     ]
+    rejected_ids: dict[str, str] = {}
+    if pending:
+        decision = decide(
+            configurable.approval_mode, pending,
+            thread_id=str(config.get("configurable", {}).get("thread_id", "")),
+            log_path=configurable.approval_log_path, interrupt_fn=interrupt,
+        )
+        if not decision["approved"]:
+            note = decision.get("note") or "no reason given"
+            rejected_ids = {p["id"]: f"Access to confidential order detail was not approved ({note})" for p in pending}
+
+    async def run_call(tool_call):
+        if tool_call["id"] in rejected_ids:
+            return fatal_denial(rejected_ids[tool_call["id"]])
+        tool = tools_by_name.get(tool_call["name"])
+        if tool is None:  # model hallucinated a tool name: tell it, don't crash the graph
+            return (f"Error: unknown tool '{tool_call['name']}'. "
+                    f"Available tools: {', '.join(sorted(tools_by_name))}")
+        return await execute_tool_safely(tool, tool_call["args"], config)
+
+    tool_execution_tasks = [run_call(tool_call) for tool_call in tool_calls]
     observations = await asyncio.gather(*tool_execution_tasks)
     
     # Create tool messages from execution results
@@ -500,7 +570,15 @@ async def researcher_tools(state: ResearcherState, config: RunnableConfig) -> Co
         for observation, tool_call in zip(observations, tool_calls)
     ]
     
-    # Step 3: Check late exit conditions (after processing tools)
+    # Step 3a: a security refusal is final - stop the loop instead of letting the model
+    # probe for a workaround (this alone removed ~20 wasted tool calls per refused request)
+    if any(is_fatal_denial(o) for o in observations):
+        return Command(
+            goto="compress_research",
+            update={"researcher_messages": tool_outputs}
+        )
+
+    # Step 3b: Check late exit conditions (after processing tools)
     exceeded_iterations = state.get("tool_call_iterations", 0) >= configurable.max_react_tool_calls
     research_complete_called = any(
         tool_call["name"] == "ResearchComplete" 
@@ -717,13 +795,14 @@ deep_researcher_builder = StateGraph(
 )
 
 # Add main workflow nodes for the complete research process
+deep_researcher_builder.add_node("triage_request", triage_request)                 # Safety triage (no LLM)
 deep_researcher_builder.add_node("clarify_with_user", clarify_with_user)           # User clarification phase
 deep_researcher_builder.add_node("write_research_brief", write_research_brief)     # Research planning phase
 deep_researcher_builder.add_node("research_supervisor", supervisor_subgraph)       # Research execution phase
 deep_researcher_builder.add_node("final_report_generation", final_report_generation)  # Report generation phase
 
 # Define main workflow edges for sequential execution
-deep_researcher_builder.add_edge(START, "clarify_with_user")                       # Entry point
+deep_researcher_builder.add_edge(START, "triage_request")                       # Entry point
 deep_researcher_builder.add_edge("research_supervisor", "final_report_generation") # Research to report
 deep_researcher_builder.add_edge("final_report_generation", END)                   # Final exit point
 
