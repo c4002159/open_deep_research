@@ -582,7 +582,14 @@ async def researcher_tools(state: ResearcherState, config: RunnableConfig) -> Co
         )
 
     # Step 3b: Check late exit conditions (after processing tools)
-    exceeded_iterations = state.get("tool_call_iterations", 0) >= configurable.max_react_tool_calls
+    # The turn counter alone is not a budget: one turn can issue several parallel searches, so a
+    # "10 turn" researcher could make 30+ calls. Count calls, with a per-researcher-type allowance.
+    calls_made = state.get("tool_calls_made", 0) + len(tool_calls)
+    call_budget = {"knowledge_base": configurable.kb_tool_call_budget,
+                   "data_analyst": configurable.analyst_tool_call_budget}.get(researcher_type, 0)
+    exceeded_call_budget = bool(call_budget) and calls_made >= call_budget
+    exceeded_iterations = (state.get("tool_call_iterations", 0) >= configurable.max_react_tool_calls
+                           or exceeded_call_budget)
     research_complete_called = any(
         tool_call["name"] == "ResearchComplete" 
         for tool_call in most_recent_message.tool_calls
@@ -592,13 +599,13 @@ async def researcher_tools(state: ResearcherState, config: RunnableConfig) -> Co
         # End research and proceed to compression
         return Command(
             goto="compress_research",
-            update={"researcher_messages": tool_outputs}
+            update={"researcher_messages": tool_outputs, "tool_calls_made": calls_made}
         )
-    
+
     # Continue research loop with tool results
     return Command(
         goto="researcher",
-        update={"researcher_messages": tool_outputs}
+        update={"researcher_messages": tool_outputs, "tool_calls_made": calls_made}
     )
 
 async def compress_research(state: ResearcherState, config: RunnableConfig):

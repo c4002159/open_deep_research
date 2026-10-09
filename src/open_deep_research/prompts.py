@@ -54,6 +54,11 @@ Today's date is {date}.
 You will return a single research question that will be used to guide the research.
 
 Guidelines:
+0. Match the Scope of the Question (applies first, and overrides guidelines 1-3 when it applies)
+- If the user asks a NARROW LOOKUP -- one rule, one number, one definition, one record count, or "what does our policy say about X" -- the research question must stay that narrow. Restate the question, name the source to use (for example "the company's internal knowledge base" or "the internal sales database"), and stop.
+- Do NOT add sub-questions, scenarios, role differences, legal/compliance background, technical implementation, version or effective-date requirements, or "also check..." items that the user did not ask for.
+- Only open-ended research tasks (comparisons, market or literature reviews, "analyse", "compare", "everything about") should be expanded with the dimensions described below.
+
 1. Maximize Specificity and Detail
 - Include all known user preferences and explicitly list key attributes or dimensions to consider.
 - It is important that all details from the user are included in the instructions.
@@ -123,6 +128,7 @@ After each ConductResearch tool call, use think_tool to analyze the results:
 <Scaling Rules>
 **Simple fact-finding, lists, and rankings** can use a single sub-agent:
 - *Example*: List the top 10 coffee shops in San Francisco → Use 1 sub-agent
+- *Example*: "What does our policy say about masking customer phone numbers?" or "How many sales records are there?" → exactly 1 sub-agent (knowledge_base / data_analyst) with the question as asked. Never split a single-document or single-query lookup into several agents.
 
 **Comparisons presented in the user request** can use a sub-agent for each element of the comparison:
 - *Example*: Compare OpenAI vs. Anthropic vs. DeepMind approaches to AI safety → Use 3 sub-agents

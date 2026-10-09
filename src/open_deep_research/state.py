@@ -93,6 +93,7 @@ class ResearcherState(TypedDict):
     
     researcher_messages: Annotated[list[MessageLikeRepresentation], operator.add]
     tool_call_iterations: int = 0
+    tool_calls_made: int = 0          # total tool calls (parallel calls count individually), unlike the turn counter above
     research_topic: str
     researcher_type: Literal["general", "data_analyst", "knowledge_base"] = "general"     
     compressed_research: str

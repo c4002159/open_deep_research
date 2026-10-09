@@ -272,6 +272,16 @@ class Configuration(BaseModel):
         metadata={"x_oap_ui_config": {"type": "text",
                                       "description": "Optional backup model (e.g. 'deepseek:deepseek-chat') used when the research model keeps failing with timeouts, rate limits or 5xx errors."}},
     )
+    kb_tool_call_budget: int = Field(
+        default=6,
+        metadata={"x_oap_ui_config": {"type": "number", "default": 6, "min": 1, "max": 30,
+                                      "description": "Max total tool calls (parallel calls counted individually) for one knowledge_base researcher; 0 = unlimited."}},
+    )
+    analyst_tool_call_budget: int = Field(
+        default=10,
+        metadata={"x_oap_ui_config": {"type": "number", "default": 10, "min": 1, "max": 30,
+                                      "description": "Max total tool calls for one data_analyst researcher; 0 = unlimited."}},
+    )
     kb_retrieval_mode: str = Field(
         default="hybrid",
         metadata={"x_oap_ui_config": {"type": "select", "default": "hybrid",
