@@ -217,3 +217,45 @@ def test_success_rate_is_reported_excluding_infrastructure_failures():
 def _res_row(passed, error=None):
     return {"id": "x", "tag": "t", "passed": passed, "latency_s": 1.0, "tool_calls": 0, "tool_errors": 0,
             "llm_calls": 0, "tokens_in": 0, "tokens_out": 0, "error": error}
+
+
+# ------------------------------------------------------------ scoring bugs found by auditing the full run
+def test_unicode_minus_is_a_minus_sign():
+    # the model wrote "−10.3%" with U+2212; it was parsed as +10.3 and a correct answer failed
+    assert score_text({"numbers": [-10.3]}, "环比增长率为 **−10.3%**，即下降")["numbers"]
+    assert not score_text({"numbers": [-10.3]}, "环比增长率为 10.3%")["numbers"]          # sign still matters
+
+
+def test_hyphen_inside_a_range_is_not_a_negative_sign():
+    assert extract_numbers("二季度是 4-6 月") == [4.0, 6.0]
+    assert score_text({"numbers": [4, 6]}, "二季度包括 4-6 月")["numbers"]
+    assert extract_numbers("同比 -5.2%，收入 3-4 倍") == [-5.2, 3.0, 4.0]
+
+
+def test_not_found_phrasings_cover_what_the_model_actually_says():
+    from eval.cases import NOT_FOUND
+
+    ans = "经查询公司内部知识库，未检索到任何关于出差住宿费报销标准的规定。知识库中不存在相关条款。"
+    assert score_text({"contains_any": NOT_FOUND}, ans)["contains_any"]
+    assert not score_text({"contains_any": NOT_FOUND}, "住宿费上限为每晚 500 元")["contains_any"]
+
+
+def test_eval_runs_use_an_isolated_memory_namespace(tmp_path, monkeypatch):
+    import asyncio
+
+    import eval.run_agent_eval as runner
+
+    monkeypatch.setattr(runner, "RESULTS", tmp_path)
+    seen = []
+
+    async def spy(case, config):
+        seen.append(config["configurable"]["mem0_user_id"])
+        return "ok"
+
+    monkeypatch.setattr(runner, "_fake_invoke", spy)
+    asyncio.run(runner.main_async(_args("iso", limit=2)))
+    assert seen and all(u.startswith("eval-iso-") for u in seen) and "default_user" not in seen
+
+    seen.clear()
+    asyncio.run(runner.main_async(_args("iso2", limit=1, shared_memory=True)))
+    assert seen == ["default_user"]

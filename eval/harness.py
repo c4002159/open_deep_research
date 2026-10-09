@@ -22,12 +22,15 @@ from typing import Any, Optional
 from langchain_core.callbacks import BaseCallbackHandler
 
 # ------------------------------------------------------------------ scoring
-_NUM = re.compile(r"-?\d[\d,]*(?:\.\d+)?(?:\s*万)?")
+# A minus sign counts only when it is not glued to a preceding digit, so the hyphen in a range like
+# "4-6月" is not read as "-6". Unicode minus/dash variants (models often write "−10.3%") are normalised first.
+_NUM = re.compile(r"(?<!\d)-?\d[\d,]*(?:\.\d+)?(?:\s*万)?")
+_MINUS_VARIANTS = str.maketrans({"\u2212": "-", "\uff0d": "-", "\u2013": "-", "\u2014": "-"})
 
 
 def extract_numbers(text: str) -> list[float]:
     out = []
-    for m in _NUM.finditer(text):
+    for m in _NUM.finditer(text.translate(_MINUS_VARIANTS)):
         tok = m.group(0)
         mult = 10_000 if tok.rstrip().endswith("万") else 1
         try:
@@ -94,6 +97,7 @@ class CaseResult:
     tokens_out: int = 0
     error: Optional[str] = None  # infrastructure failure (exception), counts as a failed case
     answer_preview: str = ""
+    answer: str = ""                    # full text (capped) - lets scoring bugs be fixed without re-running the agent
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -110,7 +114,7 @@ def build_result(case: dict, answer: str, trace: TraceHandler, latency: float,
         id=case["id"], tag=case["tag"], passed=passed, checks=checks, latency_s=round(latency, 2),
         tool_calls=len(trace.tool_calls), tool_errors=sum(1 for t in trace.tool_calls if not t["ok"]),
         llm_calls=trace.llm_calls, tokens_in=trace.tokens_in, tokens_out=trace.tokens_out,
-        error=error, answer_preview=answer[:300],
+        error=error, answer_preview=answer[:300], answer=answer[:12000],
     )
 
 

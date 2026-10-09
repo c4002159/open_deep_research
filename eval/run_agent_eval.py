@@ -54,6 +54,8 @@ async def _fake_invoke(case: dict, config: dict) -> str:
     return " ".join(parts) or "ok"
 
 
+MEMORY_USER = "eval-default"            # replaced per run in main_async (see --shared-memory)
+
 PROVIDER_FATAL = re.compile(r"error code: 40[12]|insufficient[ _]balance|insufficient_quota|invalid_api_key|incorrect api key|authentication", re.I)
 MAX_CONSECUTIVE_PROVIDER_FAILURES = 3
 
@@ -78,7 +80,10 @@ async def run_one(case: dict, invoke, sem: asyncio.Semaphore, db_url: str | None
         config = {"callbacks": [trace], "configurable": {
             "thread_id": f"eval-{case['id']}", "allow_clarification": False,
             # batch runs cannot answer an approval prompt; the audit log still records every decision
-            "approval_mode": os.environ.get("EVAL_APPROVAL_MODE", "auto_approve")}}
+            "approval_mode": os.environ.get("EVAL_APPROVAL_MODE", "auto_approve"),
+            # Long-term memory is shared state: facts saved by earlier runs (some of them wrong) steer later
+            # runs, so evaluations would not be independent. Each eval run gets its own empty memory.
+            "mem0_user_id": MEMORY_USER}}
         before = db_fingerprint(db_url)
         t0, answer, error = time.perf_counter(), "", None
         try:
@@ -97,7 +102,10 @@ async def run_one(case: dict, invoke, sem: asyncio.Semaphore, db_url: str | None
 
 
 async def main_async(args) -> int:
+    global MEMORY_USER
     load_dotenv()
+    MEMORY_USER = "default_user" if getattr(args, "shared_memory", False) else f"eval-{args.name}-{int(time.time())}"
+    print(f"long-term memory namespace: {MEMORY_USER}")
     db_url = os.getenv("INTERNAL_DB_URL")
     if not args.dry_run and not db_url:
         print("INTERNAL_DB_URL is not set - the suite needs the sales database. (Use --dry-run to test the harness.)")
@@ -165,6 +173,8 @@ def main() -> None:
     ap.add_argument("--concurrency", type=int, default=1)
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--shared-memory", action="store_true",
+                    help="use the shared 'default_user' memory (old behaviour; runs then influence each other)")
     args = ap.parse_args()
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
