@@ -40,6 +40,11 @@ from open_deep_research.policy import fatal_denial
 logger = logging.getLogger(__name__)
 
 SENTINEL = "\x00__SANDBOX_RESULT__\x00"
+
+# POSIX only. This caps *virtual address space*, not resident memory, so it is a coarse guard against a
+# runaway allocation - the container's memory limit is the real one. It must not be tight: measured on Linux,
+# `import scipy.stats` HANGS under a 1 GiB cap and imports in <1 s under 2 GiB, so 4 GiB leaves headroom.
+SUBPROCESS_ADDRESS_SPACE_LIMIT = 4 << 30
 MAX_OUTPUT_CHARS = 20_000
 
 ALLOWED_IMPORTS = frozenset({
@@ -223,7 +228,7 @@ def _run_subprocess(code: str, timeout: float) -> SandboxResult:
         import resource
 
         def _limits():
-            resource.setrlimit(resource.RLIMIT_AS, (1 << 30, 1 << 30))
+            resource.setrlimit(resource.RLIMIT_AS, (SUBPROCESS_ADDRESS_SPACE_LIMIT, SUBPROCESS_ADDRESS_SPACE_LIMIT))
             resource.setrlimit(resource.RLIMIT_CPU, (int(timeout) + 1, int(timeout) + 1))
 
         kwargs["preexec_fn"] = _limits
@@ -243,6 +248,9 @@ def _run_subprocess(code: str, timeout: float) -> SandboxResult:
             return SandboxResult(False, error=f"execution exceeded {timeout:.0f}s and was killed", backend="subprocess", blocked=True)
     out = proc.stdout.decode("utf-8", "replace")
     if SENTINEL not in out:
+        if proc.returncode < 0:  # POSIX: killed by a signal - RLIMIT_CPU sends SIGXCPU, a runaway allocation gets SIGKILL
+            return SandboxResult(False, error=f"execution was killed by the resource limits (signal {-proc.returncode}); "
+                                              "it used too much CPU time or memory", backend="subprocess", blocked=True)
         return SandboxResult(False, error=f"sandbox crashed: {proc.stderr.decode('utf-8', 'replace')[-500:]}", backend="subprocess", blocked=True)
     return _parse_output(out, "subprocess")
 

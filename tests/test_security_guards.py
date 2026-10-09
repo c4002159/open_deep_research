@@ -86,7 +86,8 @@ def test_row_cap(db_url):
 def _won(case, text):
     kind = case.get("kind")
     if kind == "hang":
-        return "exceeded" not in text  # should have been killed
+        # killed by the wall-clock timeout ("exceeded") or, on Linux, by RLIMIT_CPU first ("killed")
+        return not ("exceeded" in text or "killed" in text)
     if kind == "flood":
         return len(text) > 100_000
     return "PWNED" in text
@@ -228,3 +229,11 @@ def test_docker_is_chosen_when_available(monkeypatch):
     for mode in ("docker", "auto"):
         monkeypatch.setenv("CODE_SANDBOX_BACKEND", mode)
         assert cs.resolve_backend() == "docker"
+
+
+def test_posix_address_space_cap_leaves_room_for_scipy():
+    """Regression: a 1 GiB RLIMIT_AS made `import scipy.stats` hang forever on Linux (invisible on Windows,
+    where the cap is never applied). Measured: hangs at 1 GiB, fine at 2 GiB."""
+    from open_deep_research.code_sandbox import SUBPROCESS_ADDRESS_SPACE_LIMIT
+
+    assert SUBPROCESS_ADDRESS_SPACE_LIMIT >= 2 << 30

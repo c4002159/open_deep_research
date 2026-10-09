@@ -5,12 +5,17 @@ name: eval-smoke
 # costs tokens, so it is run manually and compared with eval/compare.py.
 on:
   pull_request:
-  push:
-    branches: [main]
+  push:                    # every branch, so work is checked before a PR exists
+  workflow_dispatch:       # and "Run workflow" from the Actions tab
+
+concurrency:
+  group: eval-smoke-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   offline-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     services:
       redis:
         image: redis:7
@@ -28,4 +33,4 @@ jobs:
       - name: Service layer (real Redis, stand-in graph)
         run: uv run pytest tests/test_service_store.py tests/test_service_api.py tests/test_service_observability.py tests/test_query_cache.py -q
       - name: Resilience, approval, triage, crash recovery
-        run: uv run pytest tests/test_resilience.py tests/test_model_fallback.py tests/test_approval.py tests/test_request_triage.py tests/test_crash_recovery.py tests/test_kb_retrieval.py tests/test_citation_check.py -q
+        run: uv run pytest tests/test_resilience.py tests/test_model_fallback.py tests/test_approval.py tests/test_request_triage.py tests/test_crash_recovery.py tests/test_kb_retrieval.py tests/test_citation_check.py tests/test_call_budget.py tests/test_memory_policy.py tests/test_loop_blocking.py tests/test_ci_coverage.py -q
