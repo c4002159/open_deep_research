@@ -43,6 +43,33 @@ class GraphProvider:
         self._cm = AsyncSqliteSaver.from_conn_string(self.settings.checkpoint_path)
         saver = await self._cm.__aenter__()
         self.graph = deep_researcher_builder.compile(checkpointer=saver)
+        await asyncio.to_thread(self._prewarm)
+
+    @staticmethod
+    def _prewarm() -> None:
+        """Load the embedding model now (a one-off ~13 s) so the first user request does not pay for it."""
+        try:
+            from open_deep_research.utils import _get_kb_vectorstore
+
+            _get_kb_vectorstore({"configurable": {}})
+        except Exception as e:  # noqa: BLE001 - the knowledge base may simply not be configured
+            logger.warning("knowledge-base prewarm skipped: %s", e)
+        try:  # the first init_chat_model() of a provider imports its SDK (~5 s): pay it now, not inside a request
+            from langchain.chat_models import init_chat_model
+
+            from open_deep_research.configuration import Configuration
+            from open_deep_research.utils import get_api_key_for_model
+
+            import os
+
+            cfg = Configuration.from_runnable_config({"configurable": {}})
+            for name in {cfg.research_model, cfg.summarization_model, cfg.compression_model, cfg.final_report_model}:
+                provider = name.split(":", 1)[0].upper()
+                # only the SDK import is wanted here; no request is made, so a placeholder key is enough
+                key = get_api_key_for_model(name, {"configurable": {}}) or os.environ.get(f"{provider}_API_KEY") or "prewarm"
+                init_chat_model(name, api_key=key, max_tokens=16)
+        except Exception as e:  # noqa: BLE001 - a missing key is reported when a task actually needs it
+            logger.warning("model prewarm skipped: %s", e)
 
     async def stop(self) -> None:
         if self._cm is not None:

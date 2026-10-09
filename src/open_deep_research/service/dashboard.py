@@ -28,7 +28,7 @@ DASHBOARD_HTML = """<!doctype html>
 <button onclick="sessionStorage.removeItem('t');load()">change token</button> <button onclick="load()">refresh</button>
 </main><script>
 const fmt = n => n == null ? "–" : n.toLocaleString();
-const money = v => v == null ? "set ODR_PRICE_*" : "$" + v.toFixed(4);
+const money = v => v == null ? "–" : "$" + v.toFixed(4);   // null = prices not configured
 async function load() {
   let t = sessionStorage.getItem("t");
   if (!t) { t = prompt("Admin bearer token"); if (!t) return; sessionStorage.setItem("t", t); }
@@ -36,7 +36,8 @@ async function load() {
   if (!r.ok) { document.getElementById("msg").textContent = "HTTP " + r.status + " - " + (await r.text()).slice(0, 120); sessionStorage.removeItem("t"); return; }
   document.getElementById("msg").textContent = "";
   const d = await r.json(), g = d.totals;
-  document.getElementById("sub").textContent = d.day + " · queue depth " + d.queue_depth;
+  document.getElementById("sub").textContent = d.day + " · queue depth " + d.queue_depth +
+    (g.est_cost_usd == null ? " · cost shows – until ODR_PRICE_IN_PER_M / ODR_PRICE_OUT_PER_M are set" : "");
   const cards = [["tokens in", fmt(g.tokens_in)], ["tokens out", fmt(g.tokens_out)], ["est. cost", money(g.est_cost_usd)],
                  ["LLM calls", fmt(g.llm_calls)], ["tool calls", fmt(g.tool_calls)], ["tool errors", fmt(g.tool_errors)]];
   document.getElementById("cards").innerHTML = cards.map(c => `<div class="card"><b>${c[1]}</b><span>${c[0]}</span></div>`).join("");

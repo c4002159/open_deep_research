@@ -29,7 +29,7 @@ class Settings:
     queue_max_depth: int = 1000
 
     # workers / leases
-    workers: int = 2
+    workers: int = 4        # tasks mostly wait on the LLM, so a few more than CPU cores is fine; ODR_WORKERS
     lease_ttl_s: int = 30
     lease_refresh_s: float = 10.0
     reaper_interval_s: float = 5.0

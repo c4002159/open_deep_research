@@ -5,6 +5,7 @@ import contextlib
 import io
 import logging
 import os
+import threading
 import traceback
 import warnings
 from datetime import datetime, timedelta, timezone
@@ -697,12 +698,23 @@ def get_notes_from_tool_calls(messages: list[MessageLikeRepresentation]):
 # Memory Tool Utils (mem0)
 ##########################
 
+_mem0_clients: dict[str, "MemoryClient"] = {}
+_mem0_lock = threading.Lock()
+
+
 def _get_mem0_client(config: RunnableConfig) -> Optional["MemoryClient"]:
-    """Create a Mem0 client from configuration, or None if not configured."""
+    """Mem0 client for the configured key, or None if not configured.
+
+    Blocking: constructing a MemoryClient makes a synchronous HTTP call to validate the key (~1.2 s measured),
+    so it is cached per key, and callers in async code must reach it through ``asyncio.to_thread``."""
     configurable = Configuration.from_runnable_config(config)
-    if not configurable.mem0_api_key:
+    key = configurable.mem0_api_key
+    if not key:
         return None
-    return MemoryClient(api_key=configurable.mem0_api_key)
+    with _mem0_lock:
+        if key not in _mem0_clients:
+            _mem0_clients[key] = MemoryClient(api_key=key)
+        return _mem0_clients[key]
 
 
 SEARCH_MEMORY_DESCRIPTION = (
@@ -739,14 +751,14 @@ async def search_memory(query: str, config: RunnableConfig = None) -> str:
         memory isn't configured.
     """
     configurable = Configuration.from_runnable_config(config)
-    client = _get_mem0_client(config)
+    client = await asyncio.to_thread(_get_mem0_client, config)
     if client is None:
         return "Memory is not configured (mem0_api_key missing) -- proceed without it."
     try:
-        raw = client.search(query, filters={"user_id": configurable.mem0_user_id})
+        raw = await asyncio.to_thread(client.search, query, filters={"user_id": configurable.mem0_user_id})
         memories = raw.get("results", raw) if isinstance(raw, dict) else raw
         memories = [m for m in memories if m.get("score", 0) >= 0.2]
-        known = _known_identifiers(configurable)
+        known = await asyncio.to_thread(_known_identifiers, configurable)
         usable = [m for m in memories if check_fact(m["memory"], known).ok]
         if not usable:
             return "No relevant memories found for this query."
@@ -774,14 +786,15 @@ async def add_memory(fact: str, config: RunnableConfig = None) -> str:
         Confirmation the fact was saved, or the reason it was refused.
     """
     configurable = Configuration.from_runnable_config(config)
-    client = _get_mem0_client(config)
+    client = await asyncio.to_thread(_get_mem0_client, config)
     if client is None:
         return "Memory is not configured (mem0_api_key missing) -- fact not saved."
-    verdict = check_fact(fact, _known_identifiers(configurable))
+    verdict = check_fact(fact, await asyncio.to_thread(_known_identifiers, configurable))
     if not verdict.ok:
         return f"Memory not saved: {verdict.message}. {MEMORY_GUIDANCE}"
     try:
-        client.add(
+        await asyncio.to_thread(
+            client.add,
             [{"role": "assistant", "content": fact}],
             user_id=configurable.mem0_user_id,
         )
@@ -795,10 +808,16 @@ async def add_memory(fact: str, config: RunnableConfig = None) -> str:
 
 _kb_embeddings = None  
 
+_kb_embeddings_lock = threading.Lock()
+
+
 def _get_kb_vectorstore(config: RunnableConfig):
+    """Blocking: the first call loads the embedding model (~13 s measured, imports torch).
+    Call it via ``asyncio.to_thread`` - on the event loop it stalls every other request and Redis call."""
     global _kb_embeddings
-    if _kb_embeddings is None:
-        _kb_embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-small-zh-v1.5")
+    with _kb_embeddings_lock:
+        if _kb_embeddings is None:
+            _kb_embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-small-zh-v1.5")
 
     configurable = Configuration.from_runnable_config(config)
     return PGVector(
@@ -821,7 +840,7 @@ async def search_knowledge_base(query: str, config: RunnableConfig = None) -> st
     """Hybrid (dense + BM25) search over the internal document knowledge base."""
     try:
         configurable = Configuration.from_runnable_config(config)
-        vectorstore = _get_kb_vectorstore(config)
+        vectorstore = await asyncio.to_thread(_get_kb_vectorstore, config)
         hits = await kb_search(
             vectorstore, configurable.postgres_connection_string, query,
             k=configurable.kb_top_k, mode=configurable.kb_retrieval_mode,
