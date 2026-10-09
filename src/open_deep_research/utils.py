@@ -36,7 +36,9 @@ import pandas as pd
 import sqlalchemy
 from sqlalchemy import text as sql_text
 
+from open_deep_research.code_sandbox import format_for_agent, run_python_sandboxed
 from open_deep_research.configuration import Configuration, SearchAPI
+from open_deep_research.sql_guard import ReadOnlyViolation, run_readonly_query
 from open_deep_research.prompts import summarize_webpage_prompt
 from open_deep_research.state import ResearchComplete, Summary
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -606,20 +608,23 @@ async def sql_executor(query: str, config: RunnableConfig = None) -> str:
         return "Error: internal_db_url is not configured. No internal database is available."
 
     try:
-        engine = sqlalchemy.create_engine(db_url)
-        with engine.connect() as conn:
-            result = conn.execute(sql_text(query))
-            if result.returns_rows:
-                rows = result.fetchmany(200)
-                if not rows:
-                    return "Query executed successfully but returned no rows."
-                columns = list(result.keys())
-                formatted = " | ".join(columns) + "\n"
-                formatted += "\n".join(" | ".join(str(v) for v in row) for row in rows)
-                return formatted
-            return f"Query executed successfully. Rows affected: {result.rowcount}"
+        columns, rows, truncated = await asyncio.to_thread(run_readonly_query, db_url, query)
+    except ReadOnlyViolation as e:
+        return (
+            f"Query rejected by read-only guard: {e}. "
+            "Only a single SELECT statement (CTEs and UNIONs allowed) can be executed; "
+            "to inspect the schema use sqlite_master / pragma_table_info('<table>') or information_schema."
+        )
     except Exception as e:
         return f"SQL execution error: {str(e)}"
+
+    if not rows:
+        return "Query executed successfully but returned no rows."
+    lines = [" | ".join(columns)]
+    lines += [" | ".join(str(v) for v in row) for row in rows]
+    if truncated:
+        lines.append(f"... (truncated to the first {len(rows)} rows)")
+    return "\n".join(lines)
 
 
 PYTHON_EXECUTOR_DESCRIPTION = (
@@ -642,33 +647,10 @@ async def python_executor(code: str) -> str:
         Captured stdout plus the repr of `result`, or an error message
         with traceback if execution failed.
     """
-    allowed_globals = {"pd": pd, "__builtins__": __builtins__}
-    try:
-        import numpy as np
-        import scipy
-        allowed_globals["np"] = np
-        allowed_globals["scipy"] = scipy
-    except ImportError:
-        pass
+    result = await run_python_sandboxed(code)
+    return format_for_agent(result)
 
-    local_vars = {}
-    stdout_capture = io.StringIO()
-    try:
-        with contextlib.redirect_stdout(stdout_capture):
-            exec(code, allowed_globals, local_vars)
-        output = stdout_capture.getvalue()
-        result_value = local_vars.get("result")
-        formatted = output
-        if result_value is not None:
-            formatted += f"\nresult = {result_value!r}"
-        return formatted or (
-            "Code executed successfully with no output. "
-            "Did you forget to set `result` or print something?"
-        )
-    except Exception:
-        return f"Python execution error:\n{traceback.format_exc()}"
-    
-    
+
 async def get_all_tools(config: RunnableConfig, researcher_type: str = "general"):
     tools = [tool(ResearchComplete), think_tool]
     if researcher_type == "data_analyst":

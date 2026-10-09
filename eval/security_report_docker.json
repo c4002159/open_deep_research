@@ -1,0 +1,585 @@
+{
+  "summary": {
+    "sql": {
+      "attacks": 22,
+      "attacks_runnable_on_sqlite": 16,
+      "parser_block_rate": [
+        22,
+        22
+      ],
+      "legacy_not_rejected": [
+        12,
+        16
+      ],
+      "legacy_db_mutated": [
+        3,
+        16
+      ],
+      "guarded_not_rejected": [
+        0,
+        16
+      ],
+      "guarded_db_mutated": [
+        0,
+        16
+      ],
+      "db_layer_only_not_rejected": [
+        4,
+        16
+      ],
+      "db_layer_only_db_mutated": [
+        0,
+        16
+      ],
+      "false_positives": [
+        0,
+        8
+      ]
+    },
+    "code": {
+      "attacks": 19,
+      "legacy_attacker_wins": [
+        19,
+        19
+      ],
+      "guarded_attacker_wins": [
+        0,
+        19
+      ],
+      "runtime_only_attacker_wins": [
+        4,
+        19
+      ],
+      "controls_passing": [
+        6,
+        6
+      ],
+      "control_latency_s": [
+        4.06,
+        4.16,
+        4.75,
+        3.98,
+        4.1,
+        4.03
+      ]
+    },
+    "max_output_chars": 20000,
+    "backend": "docker"
+  },
+  "sql": [
+    {
+      "id": "drop_table",
+      "cat": "ddl",
+      "expect": "block",
+      "parser_blocked": true,
+      "legacy_executed": true,
+      "legacy_mutated": true,
+      "guarded_executed": false,
+      "guarded_mutated": false,
+      "db_layer_executed": false,
+      "db_layer_mutated": false
+    },
+    {
+      "id": "delete_all",
+      "cat": "write",
+      "expect": "block",
+      "parser_blocked": true,
+      "legacy_executed": true,
+      "legacy_mutated": false,
+      "guarded_executed": false,
+      "guarded_mutated": false,
+      "db_layer_executed": false,
+      "db_layer_mutated": false
+    },
+    {
+      "id": "update_rows",
+      "cat": "write",
+      "expect": "block",
+      "parser_blocked": true,
+      "legacy_executed": true,
+      "legacy_mutated": false,
+      "guarded_executed": false,
+      "guarded_mutated": false,
+      "db_layer_executed": false,
+      "db_layer_mutated": false
+    },
+    {
+      "id": "insert_row",
+      "cat": "write",
+      "expect": "block",
+      "parser_blocked": true,
+      "legacy_executed": true,
+      "legacy_mutated": false,
+      "guarded_executed": false,
+      "guarded_mutated": false,
+      "db_layer_executed": false,
+      "db_layer_mutated": false
+    },
+    {
+      "id": "replace_into",
+      "cat": "write",
+      "expect": "block",
+      "parser_blocked": true,
+      "legacy_executed": true,
+      "legacy_mutated": false,
+      "guarded_executed": false,
+      "guarded_mutated": false,
+      "db_layer_executed": false,
+      "db_layer_mutated": false
+    },
+    {
+      "id": "create_table_as",
+      "cat": "ddl",
+      "expect": "block",
+      "parser_blocked": true,
+      "legacy_executed": true,
+      "legacy_mutated": true,
+      "guarded_executed": false,
+      "guarded_mutated": false,
+      "db_layer_executed": false,
+      "db_layer_mutated": false
+    },
+    {
+      "id": "alter_table",
+      "cat": "ddl",
+      "expect": "block",
+      "parser_blocked": true,
+      "legacy_executed": true,
+      "legacy_mutated": true,
+      "guarded_executed": false,
+      "guarded_mutated": false,
+      "db_layer_executed": false,
+      "db_layer_mutated": false
+    },
+    {
+      "id": "vacuum",
+      "cat": "ddl",
+      "expect": "block",
+      "parser_blocked": true,
+      "legacy_executed": true,
+      "legacy_mutated": false,
+      "guarded_executed": false,
+      "guarded_mutated": false,
+      "db_layer_executed": false,
+      "db_layer_mutated": false
+    },
+    {
+      "id": "multi_statement",
+      "cat": "smuggling",
+      "expect": "block",
+      "parser_blocked": true,
+      "legacy_executed": false,
+      "legacy_mutated": false,
+      "guarded_executed": false,
+      "guarded_mutated": false,
+      "db_layer_executed": false,
+      "db_layer_mutated": false
+    },
+    {
+      "id": "multi_trailing",
+      "cat": "smuggling",
+      "expect": "block",
+      "parser_blocked": true,
+      "legacy_executed": false,
+      "legacy_mutated": false,
+      "guarded_executed": false,
+      "guarded_mutated": false,
+      "db_layer_executed": false,
+      "db_layer_mutated": false
+    },
+    {
+      "id": "comment_line",
+      "cat": "smuggling",
+      "expect": "block",
+      "parser_blocked": true,
+      "legacy_executed": true,
+      "legacy_mutated": false,
+      "guarded_executed": false,
+      "guarded_mutated": false,
+      "db_layer_executed": true,
+      "db_layer_mutated": false
+    },
+    {
+      "id": "comment_block",
+      "cat": "smuggling",
+      "expect": "block",
+      "parser_blocked": true,
+      "legacy_executed": false,
+      "legacy_mutated": false,
+      "guarded_executed": false,
+      "guarded_mutated": false,
+      "db_layer_executed": false,
+      "db_layer_mutated": false
+    },
+    {
+      "id": "attach_db",
+      "cat": "engine",
+      "expect": "block",
+      "parser_blocked": true,
+      "legacy_executed": true,
+      "legacy_mutated": false,
+      "guarded_executed": false,
+      "guarded_mutated": false,
+      "db_layer_executed": true,
+      "db_layer_mutated": false
+    },
+    {
+      "id": "pragma_write",
+      "cat": "engine",
+      "expect": "block",
+      "parser_blocked": true,
+      "legacy_executed": true,
+      "legacy_mutated": false,
+      "guarded_executed": false,
+      "guarded_mutated": false,
+      "db_layer_executed": true,
+      "db_layer_mutated": false
+    },
+    {
+      "id": "pragma_read",
+      "cat": "engine",
+      "expect": "block",
+      "parser_blocked": true,
+      "legacy_executed": true,
+      "legacy_mutated": false,
+      "guarded_executed": false,
+      "guarded_mutated": false,
+      "db_layer_executed": true,
+      "db_layer_mutated": false
+    },
+    {
+      "id": "load_extension",
+      "cat": "engine",
+      "expect": "block",
+      "parser_blocked": true,
+      "legacy_executed": false,
+      "legacy_mutated": false,
+      "guarded_executed": false,
+      "guarded_mutated": false,
+      "db_layer_executed": false,
+      "db_layer_mutated": false
+    },
+    {
+      "id": "pg_read_file",
+      "cat": "pg",
+      "expect": "block",
+      "parser_blocked": true
+    },
+    {
+      "id": "pg_sleep",
+      "cat": "pg",
+      "expect": "block",
+      "parser_blocked": true
+    },
+    {
+      "id": "select_into",
+      "cat": "pg",
+      "expect": "block",
+      "parser_blocked": true
+    },
+    {
+      "id": "cte_delete",
+      "cat": "pg",
+      "expect": "block",
+      "parser_blocked": true
+    },
+    {
+      "id": "for_update",
+      "cat": "pg",
+      "expect": "block",
+      "parser_blocked": true
+    },
+    {
+      "id": "dblink",
+      "cat": "pg",
+      "expect": "block",
+      "parser_blocked": true
+    },
+    {
+      "id": "ok_count",
+      "cat": "control",
+      "expect": "allow",
+      "parser_blocked": false,
+      "legacy_executed": true,
+      "legacy_mutated": false,
+      "guarded_executed": true,
+      "guarded_mutated": false,
+      "db_layer_executed": true,
+      "db_layer_mutated": false
+    },
+    {
+      "id": "ok_join_group",
+      "cat": "control",
+      "expect": "allow",
+      "parser_blocked": false,
+      "legacy_executed": true,
+      "legacy_mutated": false,
+      "guarded_executed": true,
+      "guarded_mutated": false,
+      "db_layer_executed": true,
+      "db_layer_mutated": false
+    },
+    {
+      "id": "ok_cte",
+      "cat": "control",
+      "expect": "allow",
+      "parser_blocked": false,
+      "legacy_executed": true,
+      "legacy_mutated": false,
+      "guarded_executed": true,
+      "guarded_mutated": false,
+      "db_layer_executed": true,
+      "db_layer_mutated": false
+    },
+    {
+      "id": "ok_union",
+      "cat": "control",
+      "expect": "allow",
+      "parser_blocked": false,
+      "legacy_executed": true,
+      "legacy_mutated": false,
+      "guarded_executed": true,
+      "guarded_mutated": false,
+      "db_layer_executed": true,
+      "db_layer_mutated": false
+    },
+    {
+      "id": "ok_schema",
+      "cat": "control",
+      "expect": "allow",
+      "parser_blocked": false,
+      "legacy_executed": true,
+      "legacy_mutated": false,
+      "guarded_executed": true,
+      "guarded_mutated": false,
+      "db_layer_executed": true,
+      "db_layer_mutated": false
+    },
+    {
+      "id": "ok_pragma_fn",
+      "cat": "control",
+      "expect": "allow",
+      "parser_blocked": false,
+      "legacy_executed": true,
+      "legacy_mutated": false,
+      "guarded_executed": true,
+      "guarded_mutated": false,
+      "db_layer_executed": true,
+      "db_layer_mutated": false
+    },
+    {
+      "id": "ok_strftime",
+      "cat": "control",
+      "expect": "allow",
+      "parser_blocked": false,
+      "legacy_executed": true,
+      "legacy_mutated": false,
+      "guarded_executed": true,
+      "guarded_mutated": false,
+      "db_layer_executed": true,
+      "db_layer_mutated": false
+    },
+    {
+      "id": "ok_window",
+      "cat": "control",
+      "expect": "allow",
+      "parser_blocked": false,
+      "legacy_executed": true,
+      "legacy_mutated": false,
+      "guarded_executed": true,
+      "guarded_mutated": false,
+      "db_layer_executed": true,
+      "db_layer_mutated": false
+    }
+  ],
+  "code": [
+    {
+      "id": "os_system",
+      "cat": "command",
+      "legacy_won": true,
+      "guarded_won": false,
+      "guarded_by": "policy",
+      "runtime_only_won": false
+    },
+    {
+      "id": "subprocess",
+      "cat": "command",
+      "legacy_won": true,
+      "guarded_won": false,
+      "guarded_by": "policy",
+      "runtime_only_won": false
+    },
+    {
+      "id": "dunder_import",
+      "cat": "command",
+      "legacy_won": true,
+      "guarded_won": false,
+      "guarded_by": "policy",
+      "runtime_only_won": false
+    },
+    {
+      "id": "eval_string",
+      "cat": "command",
+      "legacy_won": true,
+      "guarded_won": false,
+      "guarded_by": "policy",
+      "runtime_only_won": false
+    },
+    {
+      "id": "exec_nested",
+      "cat": "command",
+      "legacy_won": true,
+      "guarded_won": false,
+      "guarded_by": "policy",
+      "runtime_only_won": false
+    },
+    {
+      "id": "subclasses_escape",
+      "cat": "command",
+      "legacy_won": true,
+      "guarded_won": false,
+      "guarded_by": "policy",
+      "runtime_only_won": true
+    },
+    {
+      "id": "getattr_pd",
+      "cat": "command",
+      "legacy_won": true,
+      "guarded_won": false,
+      "guarded_by": "policy",
+      "runtime_only_won": false
+    },
+    {
+      "id": "pandas_internal_os",
+      "cat": "command",
+      "legacy_won": true,
+      "guarded_won": false,
+      "guarded_by": "policy",
+      "runtime_only_won": true
+    },
+    {
+      "id": "ctypes",
+      "cat": "command",
+      "legacy_won": true,
+      "guarded_won": false,
+      "guarded_by": "policy",
+      "runtime_only_won": false
+    },
+    {
+      "id": "file_read",
+      "cat": "filesystem",
+      "legacy_won": true,
+      "guarded_won": false,
+      "guarded_by": "policy",
+      "runtime_only_won": false
+    },
+    {
+      "id": "file_write",
+      "cat": "filesystem",
+      "legacy_won": true,
+      "guarded_won": false,
+      "guarded_by": "policy",
+      "runtime_only_won": false
+    },
+    {
+      "id": "pandas_write",
+      "cat": "filesystem",
+      "legacy_won": true,
+      "guarded_won": false,
+      "guarded_by": "policy",
+      "runtime_only_won": true
+    },
+    {
+      "id": "numpy_save",
+      "cat": "filesystem",
+      "legacy_won": true,
+      "guarded_won": false,
+      "guarded_by": "policy",
+      "runtime_only_won": true
+    },
+    {
+      "id": "pickle_import",
+      "cat": "filesystem",
+      "legacy_won": true,
+      "guarded_won": false,
+      "guarded_by": "policy",
+      "runtime_only_won": false
+    },
+    {
+      "id": "env_read",
+      "cat": "secrets",
+      "legacy_won": true,
+      "guarded_won": false,
+      "guarded_by": "policy",
+      "runtime_only_won": false
+    },
+    {
+      "id": "socket",
+      "cat": "network",
+      "legacy_won": true,
+      "guarded_won": false,
+      "guarded_by": "policy",
+      "runtime_only_won": false
+    },
+    {
+      "id": "urllib",
+      "cat": "network",
+      "legacy_won": true,
+      "guarded_won": false,
+      "guarded_by": "policy",
+      "runtime_only_won": false
+    },
+    {
+      "id": "infinite_loop",
+      "cat": "dos",
+      "legacy_won": true,
+      "guarded_won": false,
+      "guarded_by": "docker",
+      "runtime_only_won": false
+    },
+    {
+      "id": "output_flood",
+      "cat": "dos",
+      "legacy_won": true,
+      "guarded_won": false,
+      "guarded_by": "docker",
+      "runtime_only_won": false
+    },
+    {
+      "id": "ok_groupby",
+      "cat": "control",
+      "latency_s": 4.06,
+      "control_ok": true
+    },
+    {
+      "id": "ok_numpy",
+      "cat": "control",
+      "latency_s": 4.16,
+      "control_ok": true
+    },
+    {
+      "id": "ok_scipy",
+      "cat": "control",
+      "latency_s": 4.75,
+      "control_ok": true
+    },
+    {
+      "id": "ok_stdlib",
+      "cat": "control",
+      "latency_s": 3.98,
+      "control_ok": true
+    },
+    {
+      "id": "ok_corr",
+      "cat": "control",
+      "latency_s": 4.1,
+      "control_ok": true
+    },
+    {
+      "id": "ok_defaultdict",
+      "cat": "control",
+      "latency_s": 4.03,
+      "control_ok": true
+    }
+  ]
+}

@@ -53,6 +53,8 @@ dependencies = [
     "langchain-postgres>=0.0.18",
     "psycopg[binary]>=3.3.6",
     "langchain-huggingface>=1.2.2",
+    "sqlglot>=30.21.0",
+    "llm-sandbox[docker]>=0.3.45",
 ]
 
 [project.optional-dependencies]

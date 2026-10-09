@@ -1097,6 +1097,21 @@ wheels = [
 ]
 
 [[package]]
+name = "docker"
+version = "7.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pywin32", version = "310", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14' and sys_platform == 'win32'" },
+    { name = "pywin32", version = "312", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14' and sys_platform == 'win32'" },
+    { name = "requests" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/88/7f/731ff914b0255d3d065f45fd4e626d4b8c95dbcbaada049f337a6ac16410/docker-7.2.0.tar.gz", hash = "sha256:cebb93773d334f778e023a7ee352a8d6e13ab1bd3b863a4d4a59dec897df43ac", size = 118731, upload-time = "2026-07-09T14:53:46.39Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/75/23/529140fe1aab80fc6992f93a706deec709140a6397439139a054e1515c45/docker-7.2.0-py3-none-any.whl", hash = "sha256:a3f45fdeb9165e2d25d9a1d02ddf3bc70fb572cf5ebbf9b58558c22caf29b71f", size = 148775, upload-time = "2026-07-09T14:53:45.224Z" },
+]
+
+[[package]]
 name = "docstring-parser"
 version = "0.16"
 source = { registry = "https://pypi.org/simple" }
@@ -2908,6 +2923,23 @@ wheels = [
 ]
 
 [[package]]
+name = "llm-sandbox"
+version = "0.3.45"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3a/2e/a5236e25d1be23d1ecc2cc16794ac791f3af16bc637c2d2d2c61bb1af7e9/llm_sandbox-0.3.45.tar.gz", hash = "sha256:02d9f4a1936eb9db7b3f8749b5d23bc118434786a6f5f548be7bbd0371f674f2", size = 698030, upload-time = "2026-09-28T04:31:06.672Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/57/a9/e72389a93db454b1bdd05fcecac128fbca001b958a643075f6d5dc514e15/llm_sandbox-0.3.45-py3-none-any.whl", hash = "sha256:0c72984562bb866a95fdd03f22965a67340ece5b7bac4696cefa1460f3bc2cf6", size = 114879, upload-time = "2026-09-28T04:31:05.514Z" },
+]
+
+[package.optional-dependencies]
+docker = [
+    { name = "docker" },
+]
+
+[[package]]
 name = "lxml"
 version = "6.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4027,6 +4059,7 @@ dependencies = [
     { name = "langgraph-cli", extra = ["inmem"] },
     { name = "langsmith" },
     { name = "linkup-sdk" },
+    { name = "llm-sandbox", extra = ["docker"] },
     { name = "markdownify" },
     { name = "mcp" },
     { name = "mem0ai" },
@@ -4043,6 +4076,7 @@ dependencies = [
     { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "sentence-transformers" },
     { name = "sqlalchemy" },
+    { name = "sqlglot" },
     { name = "supabase" },
     { name = "tavily-python" },
     { name = "xmltodict" },
@@ -4083,6 +4117,7 @@ requires-dist = [
     { name = "langgraph-cli", extras = ["inmem"], specifier = ">=0.3.1" },
     { name = "langsmith", specifier = ">=0.3.37" },
     { name = "linkup-sdk", specifier = ">=0.2.3" },
+    { name = "llm-sandbox", extras = ["docker"], specifier = ">=0.3.45" },
     { name = "markdownify", specifier = ">=0.11.6" },
     { name = "mcp", specifier = ">=1.9.4" },
     { name = "mem0ai", specifier = ">=2.0.20" },
@@ -4099,6 +4134,7 @@ requires-dist = [
     { name = "scipy", specifier = ">=1.15.3" },
     { name = "sentence-transformers", specifier = ">=6.1.0" },
     { name = "sqlalchemy", specifier = ">=2.0.41" },
+    { name = "sqlglot", specifier = ">=30.21.0" },
     { name = "supabase", specifier = ">=2.15.3" },
     { name = "tavily-python", specifier = ">=0.5.0" },
     { name = "xmltodict", specifier = ">=0.14.2" },
@@ -6566,6 +6602,15 @@ wheels = [
 [package.optional-dependencies]
 asyncio = [
     { name = "greenlet" },
+]
+
+[[package]]
+name = "sqlglot"
+version = "30.21.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/11/c0/cd761f018601bf954c9018420eb6707e3675292dfa514cfda44d06aff2ee/sqlglot-30.21.0.tar.gz", hash = "sha256:6787ac202a3adc0e25434f1512370a655e51cb3de8c792544de5f6ff9c618d25", size = 6064227, upload-time = "2026-09-30T17:35:09.731Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7e/93/acaa0862f841051e490326c1fc8c61d618d2df26f9e7aed26c331419ab15/sqlglot-30.21.0-py3-none-any.whl", hash = "sha256:816d1a4815b7562b3976efcc0b561c928a743f976efd0fb8ad6db7a5b96c069e", size = 763892, upload-time = "2026-09-30T17:35:07.976Z" },
 ]
 
 [[package]]
