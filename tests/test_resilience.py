@@ -51,6 +51,9 @@ def flaky(fail_times, fail_text="SQL execution error: connection refused", ok="r
     ("SQL execution error: query exceeded 10s and was cancelled (timeout)", True),
     ("Error executing tool: TimeoutError", True),
     ("SQL execution error: no such column: foo", False),         # model's mistake
+    ('SQL execution error: (sqlite3.OperationalError) near "ILIKE": syntax error', False),   # seen in a real run
+    ("SQL execution error: (sqlite3.OperationalError) database is locked", True),
+    ("SQL execution error: (psycopg.OperationalError) connection refused", True),
     ("SQL execution error: syntax error near FROM", False),
     ("Query rejected by read-only guard: comments", False),
     (fatal_denial("DROP not allowed"), False),

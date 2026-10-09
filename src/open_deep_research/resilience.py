@@ -41,7 +41,16 @@ _TRANSIENT_MARKERS = (
     "connection aborted", "could not connect", "server closed the connection",
     "connection was closed", "database is locked", "temporarily unavailable",
     "rate limit", "too many requests", "429", "502", "503", "504", "service unavailable",
-    "operationalerror", "interfaceerror", "network is unreachable",
+    "network is unreachable",
+)
+# Database drivers raise OperationalError for BOTH outages and plain SQL mistakes (SQLite reports a
+# syntax error that way). These phrases mean the model wrote bad SQL: retrying cannot help and
+# counting it against the breaker would take a healthy database offline.
+_MODEL_MISTAKE_MARKERS = (
+    "syntax error", "no such table", "no such column", "no such function", "does not exist",
+    "ambiguous column", "unrecognized token", "incomplete input", "misuse of aggregate",
+    "near \"", "invalid input syntax", "undefined column", "undefined table", "unknown column",
+    "readonly database", "not authorized", "datatype mismatch",
 )
 _TRANSIENT_EXCEPTIONS = (asyncio.TimeoutError, TimeoutError, ConnectionError)
 
@@ -51,6 +60,8 @@ def is_transient_text(text: str) -> bool:
     if not isinstance(text, str) or is_fatal_denial(text):
         return False
     head = text[:400].lower()
+    if any(m in head for m in _MODEL_MISTAKE_MARKERS):
+        return False
     looks_like_error = head.startswith(("sql execution error", "error", "python execution error",
                                         "knowledge base search error", "memory search error"))
     return looks_like_error and any(m in head for m in _TRANSIENT_MARKERS)

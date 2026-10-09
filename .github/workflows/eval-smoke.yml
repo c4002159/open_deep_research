@@ -11,6 +11,12 @@ on:
 jobs:
   offline-tests:
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7
+        ports: ["6390:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -19,3 +25,7 @@ jobs:
         run: uv run pytest tests/test_security_guards.py -q
       - name: Evaluation framework
         run: uv run pytest tests/test_eval_framework.py -q
+      - name: Service layer (real Redis, stand-in graph)
+        run: uv run pytest tests/test_service_store.py tests/test_service_api.py tests/test_query_cache.py -q
+      - name: Resilience, approval, triage, crash recovery
+        run: uv run pytest tests/test_resilience.py tests/test_model_fallback.py tests/test_approval.py tests/test_request_triage.py tests/test_crash_recovery.py -q

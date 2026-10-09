@@ -272,6 +272,11 @@ class Configuration(BaseModel):
         metadata={"x_oap_ui_config": {"type": "text",
                                       "description": "Optional backup model (e.g. 'deepseek:deepseek-chat') used when the research model keeps failing with timeouts, rate limits or 5xx errors."}},
     )
+    schema_cache_ttl_s: float = Field(
+        default=300.0,
+        metadata={"x_oap_ui_config": {"type": "number", "default": 300, "min": 0, "max": 86400,
+                                      "description": "Seconds to cache schema-introspection query results (0 disables). Business-data queries are never cached."}},
+    )
     enable_request_triage: bool = Field(
         default=True,
         metadata={"x_oap_ui_config": {"type": "boolean", "default": True,
@@ -340,6 +345,10 @@ class Configuration(BaseModel):
             field_name: os.environ.get(field_name.upper(), configurable.get(field_name))
             for field_name in field_names
         }
+        # per-user identity must come from the authenticated request, never from a process-wide
+        # environment variable - otherwise one MEM0_USER_ID would silently share memory across users
+        if configurable.get("mem0_user_id"):
+            values["mem0_user_id"] = configurable["mem0_user_id"]
         return cls(**{k: v for k, v in values.items() if v is not None})
 
     class Config:

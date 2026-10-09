@@ -39,6 +39,7 @@ from sqlalchemy import text as sql_text
 from open_deep_research.code_sandbox import format_for_agent, run_python_sandboxed
 from open_deep_research.configuration import Configuration, SearchAPI
 from open_deep_research.policy import fatal_denial, is_fatal_denial
+from open_deep_research.query_cache import QueryCache, get_cache, is_introspection
 from open_deep_research.sql_guard import ReadOnlyViolation, run_readonly_query
 from open_deep_research.prompts import summarize_webpage_prompt
 from open_deep_research.state import ResearchComplete, Summary
@@ -609,7 +610,15 @@ async def sql_executor(query: str, config: RunnableConfig = None) -> str:
         return "Error: internal_db_url is not configured. No internal database is available."
 
     try:
-        columns, rows, truncated = await asyncio.to_thread(run_readonly_query, db_url, query)
+        cache = get_cache(configurable.schema_cache_ttl_s)
+        cache_key = QueryCache.key(db_url, query)
+        cached = cache.get(cache_key) if is_introspection(query) else None
+        if cached is not None:
+            columns, rows, truncated = cached
+        else:
+            columns, rows, truncated = await asyncio.to_thread(run_readonly_query, db_url, query)
+            if is_introspection(query):          # validated read-only SELECT on schema tables only
+                cache.put(cache_key, [columns, [list(r) for r in rows], truncated])
     except ReadOnlyViolation as e:
         if e.fatal:
             return fatal_denial(f"Query rejected by read-only guard: {e}")

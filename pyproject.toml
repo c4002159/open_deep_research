@@ -56,6 +56,9 @@ dependencies = [
     "sqlglot>=30.21.0",
     "llm-sandbox[docker]>=0.3.45",
     "langgraph-checkpoint-sqlite>=3.1.1",
+    "fastapi>=0.143.0",
+    "redis>=5",
+    "uvicorn>=0.34",
 ]
 
 [project.optional-dependencies]
@@ -66,7 +69,7 @@ requires = ["setuptools>=73.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["open_deep_research", "legacy", "tests"]
+packages = ["open_deep_research", "open_deep_research.service", "legacy", "tests"]
 
 [tool.setuptools.package-dir]
 "open_deep_research" = "src/open_deep_research"

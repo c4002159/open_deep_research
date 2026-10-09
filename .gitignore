@@ -73,3 +73,6 @@ eval/results/
 
 # runtime audit logs
 logs/
+
+# local service state
+data/
