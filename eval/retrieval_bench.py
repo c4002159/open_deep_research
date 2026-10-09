@@ -23,6 +23,8 @@ from pathlib import Path
 
 import numpy as np
 
+from open_deep_research.kb_retrieval import BM25, rrf as _rrf
+
 from eval.retrieval_bench_cases import RETRIEVAL_BENCH_CASES
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -50,45 +52,11 @@ def load_chunks() -> list[dict]:
     return chunks
 
 
-# ---------------------------------------------------------------- BM25 (char uni+bigrams, no jieba needed)
-def tokenize(text: str) -> list[str]:
-    text = text.lower()
-    toks = re.findall(r"[a-z0-9_]+", text)
-    cjk = re.findall(r"[一-鿿]", text)
-    toks += cjk + [a + b for a, b in zip(cjk, cjk[1:])]
-    return toks
+# BM25 and RRF now live in open_deep_research.kb_retrieval (the production code path)
 
 
-class BM25:
-    def __init__(self, docs: list[str], k1: float = 1.5, b: float = 0.75):
-        self.k1, self.b = k1, b
-        self.tf = [Counter(tokenize(d)) for d in docs]
-        self.len = np.array([sum(t.values()) for t in self.tf], dtype=float)
-        self.avg = self.len.mean()
-        df = Counter(tok for t in self.tf for tok in t)
-        n = len(docs)
-        self.idf = {t: math.log(1 + (n - c + 0.5) / (c + 0.5)) for t, c in df.items()}
-
-    def scores(self, query: str) -> np.ndarray:
-        out = np.zeros(len(self.tf))
-        for tok in set(tokenize(query)):
-            idf = self.idf.get(tok)
-            if idf is None:
-                continue
-            for i, tf in enumerate(self.tf):
-                f = tf.get(tok, 0)
-                if f:
-                    out[i] += idf * f * (self.k1 + 1) / (f + self.k1 * (1 - self.b + self.b * self.len[i] / self.avg))
-        return out
-
-
-# ---------------------------------------------------------------- retrievers
-def rrf(rankings: list[list[int]], k: int = 60) -> list[int]:
-    score: dict[int, float] = {}
-    for ranking in rankings:
-        for rank, idx in enumerate(ranking):
-            score[idx] = score.get(idx, 0.0) + 1.0 / (k + rank + 1)
-    return sorted(score, key=score.get, reverse=True)
+def rrf(rankings, k=60):
+    return _rrf(rankings, k)
 
 
 class Retrievers:

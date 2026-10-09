@@ -1,6 +1,7 @@
 """Main LangGraph implementation for the Deep Research agent."""
 
 import asyncio
+import re
 from typing import Literal
 
 from langchain.chat_models import init_chat_model
@@ -22,6 +23,8 @@ from open_deep_research.configuration import (
 )
 
 from open_deep_research.model_fallback import ainvoke_with_fallback
+from open_deep_research.citation_check import cited_documents, footer as citation_footer, verify_citations
+from open_deep_research.kb_retrieval import load_corpus
 from open_deep_research.approval import approval_reason, audit, decide
 from open_deep_research.request_triage import classify_request, refusal_message
 from open_deep_research.policy import fatal_denial, is_fatal_denial
@@ -694,6 +697,20 @@ researcher_builder.add_edge("compress_research", END)      # Exit point after co
 # Compile researcher subgraph for parallel execution by supervisor
 researcher_subgraph = researcher_builder.compile()
 
+async def _check_citations(report: str, findings: str, configurable):
+    """Citation verification against the real knowledge base; never allowed to break report generation."""
+    try:
+        if not cited_documents(report):
+            return None
+        try:
+            known = (await asyncio.to_thread(load_corpus, configurable.postgres_connection_string)).known_sources
+        except Exception:  # KB unreachable: still check groundedness against this run's notes
+            known = None
+        return verify_citations(report, findings, known)
+    except Exception:
+        return None
+
+
 async def final_report_generation(state: AgentState, config: RunnableConfig):
     """Generate the final comprehensive research report with retry logic for token limits.
     
@@ -741,9 +758,15 @@ async def final_report_generation(state: AgentState, config: RunnableConfig):
                 HumanMessage(content=final_report_prompt)
             ])
             
+            report_text = final_report.content
+            check = await _check_citations(report_text, findings, configurable)
+            if check is not None and not check.ok:
+                report_text += citation_footer(check, chinese=bool(re.search(r"[一-鿿]", report_text)))
+                final_report.content = report_text
+
             # Return successful report generation
             return {
-                "final_report": final_report.content, 
+                "final_report": report_text, 
                 "messages": [final_report],
                 **cleared_state
             }

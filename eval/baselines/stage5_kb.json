@@ -1,0 +1,174 @@
+{
+  "meta": {
+    "timestamp": "2026-10-09T05:18:54+00:00",
+    "git_commit": "514a75a",
+    "git_dirty": true,
+    "models": {
+      "RESEARCH_MODEL": "deepseek:deepseek-chat",
+      "SUMMARIZATION_MODEL": "deepseek:deepseek-chat",
+      "COMPRESSION_MODEL": "deepseek:deepseek-chat",
+      "FINAL_REPORT_MODEL": "deepseek:deepseek-chat"
+    },
+    "dataset_hash": "4f43f5d538b2",
+    "name": "stage5_kb",
+    "dry_run": false
+  },
+  "summary": {
+    "overall": {
+      "cases": 8,
+      "task_success_rate": 1.0,
+      "tool_call_success_rate": 1.0,
+      "avg_tool_calls": 12.12,
+      "avg_llm_calls": 16.0,
+      "avg_tokens": 66835,
+      "est_cost_per_case_usd": null,
+      "latency_p50_s": 59.59,
+      "latency_p95_s": 133.17,
+      "infra_errors": 0
+    },
+    "by_tag": {
+      "kb": {
+        "cases": 8,
+        "task_success_rate": 1.0,
+        "tool_call_success_rate": 1.0,
+        "avg_tool_calls": 12.12,
+        "avg_llm_calls": 16.0,
+        "avg_tokens": 66835,
+        "est_cost_per_case_usd": null,
+        "latency_p50_s": 59.59,
+        "latency_p95_s": 133.17,
+        "infra_errors": 0
+      }
+    }
+  },
+  "results": [
+    {
+      "id": "kb_refund_window",
+      "tag": "kb",
+      "passed": true,
+      "checks": {
+        "numbers": true
+      },
+      "latency_s": 72.67,
+      "tool_calls": 5,
+      "tool_errors": 0,
+      "llm_calls": 11,
+      "tokens_in": 34545,
+      "tokens_out": 9236,
+      "error": null,
+      "answer_preview": "# 客户收货后全额退款申请时限——内部知识库查询报告\n\n**报告日期：** 2026年10月9日（星期五）\n\n---\n\n## 一、核心结论摘要\n\n根据公司内部知识库中唯一涉及全额退款时限的文档 `refundPolicy.md`，官方规定为：\n\n> **订单交付后 30 天内，客户可对未激活的产品许可申请全额退款。**\n\n需要特别说明的是，该 30 天全额退款权利**并非适用于所有商品**，其明确限定对象为\"**未激活的产品许可（unactivated product licenses）**\"。对于已激活的订阅类产品，知识库规定仅可申请部分退款；对于因公司原因导致服务中断超过 72 小时的订单"
+    },
+    {
+      "id": "kb_refund_30k",
+      "tag": "kb",
+      "passed": true,
+      "checks": {
+        "contains_all": true
+      },
+      "latency_s": 81.87,
+      "tool_calls": 11,
+      "tool_errors": 0,
+      "llm_calls": 16,
+      "tokens_in": 51282,
+      "tokens_out": 12448,
+      "error": null,
+      "answer_preview": "# 三万元退款申请审批权限检索报告\n\n## 核心结论\n\n根据公司内部知识库中的制度文件《客户退款与售后处理规范》（源文件名：`refundPolicy.md`）第 2 节\"退款审批权限\"的明确规定，**一笔金额为人民币 30,000 元（三万元）的退款申请，应由【区域销售经理】与【财务经理】双签（会签）审批**，无需上报财务总监审批——财务总监审批档位仅适用于退款金额超过 50,000 元的情形[1][2]。\n\n---\n\n## 一、制度依据：退款审批权限金额分档\n\n### 1.1 原文引用\n\n**来源文档：《客户退款与售后处理规范》（源文件名：`refundPolicy.md`）第 2 节**"
+    },
+    {
+      "id": "kb_strategic_discount",
+      "tag": "kb",
+      "passed": true,
+      "checks": {
+        "contains_all": true
+      },
+      "latency_s": 47.04,
+      "tool_calls": 6,
+      "tool_errors": 0,
+      "llm_calls": 11,
+      "tokens_in": 30459,
+      "tokens_out": 7410,
+      "error": null,
+      "answer_preview": "# 战略客户折扣上限政策——内部知识库检索报告\n\n## 一、执行摘要\n\n在公司内部知识库中，关于「战略客户（strategic customer）折扣上限」的政策规定，**唯一权威来源**为《客户分级与折扣审批规范》（内部知识库源文件标识：`customerTier.md`）。核心结论如下：\n\n- **战略客户折扣上限为 15%**，且需**销售副总裁**审批。\n- **任何超出 15% 的折扣**，必须提交**总经理办公会**专项审批。\n- 战略客户的官方定义为：**年度累计销售额超过 500,000 元**。\n- 客户等级**每年 1 月 1 日统一重新评定一次**。\n- 该文档**未包含"
+    },
+    {
+      "id": "kb_q2",
+      "tag": "kb",
+      "passed": true,
+      "checks": {
+        "numbers": true
+      },
+      "latency_s": 82.18,
+      "tool_calls": 11,
+      "tool_errors": 0,
+      "llm_calls": 18,
+      "tokens_in": 59222,
+      "tokens_out": 10452,
+      "error": null,
+      "answer_preview": "# 公司内部知识库中\"二季度\"（Q2）定义的核查结论\n\n## 核心结论\n\n根据对公司内部知识库的多轮检索，（以下简称\"《销售报表指标口径定义》\"）第 4 节《同比与环比》中给出了**唯一一处明确的季度月份划分定义**，原文如下：\n\n> **季度划分：一季度 1-3 月，二季度 4-6 月，三季度 7-9 月，四季度 10-12 月。**\n\n即：**二季度（Q2）＝ 4 月、5 月、6 月**，采用标准自然季度（自然年度，1 月—12 月）口径 [1]。\n\n## 各口径下的月份范围对照\n\n根据检索结果，知识库中**未发现**存在与上述定义不一致的会计口径、业务口径或财年口径。具体情况如下表：\n\n"
+    },
+    {
+      "id": "kb_phone_mask",
+      "tag": "kb",
+      "passed": true,
+      "checks": {
+        "contains_any": true
+      },
+      "latency_s": 133.17,
+      "tool_calls": 40,
+      "tool_errors": 0,
+      "llm_calls": 34,
+      "tokens_in": 145223,
+      "tokens_out": 28677,
+      "error": null,
+      "answer_preview": "# 客户手机号对外展示脱敏处理 — 内部知识库检索汇总报告\n\n## 一、总体结论\n\n经对公司内部知识库进行多轮、多维度语义检索（累计超过 30 次查询，覆盖脱敏规则、权限角色、审批流程、合规法规、技术实现、场景差异化、例外情况等全部维度），**与\"客户手机号对外展示脱敏处理\"直接相关的内部规定仅集中在一份文档中**：\n\n> **《数据访问权限与脱敏规范》（文件名：`dataPermission.md`）**\n\n该文档第 3 节「敏感字段脱敏」给出了公司目前唯一成文的手机号脱敏规则。除该文档外，其余检索命中的文档（如 `customerTier.md`、`productCatalog.md`、`"
+    },
+    {
+      "id": "kb_regions",
+      "tag": "kb",
+      "passed": true,
+      "checks": {
+        "contains_all": true
+      },
+      "latency_s": 52.36,
+      "tool_calls": 6,
+      "tool_errors": 0,
+      "llm_calls": 11,
+      "tokens_in": 30354,
+      "tokens_out": 7593,
+      "error": null,
+      "answer_preview": "# 公司销售大区划分情况调查报告\n\n## 一、结论摘要\n\n经对公司内部知识库（销售制度文档库）的多轮语义检索，**仅有一份文档直接记载了销售大区划分信息**，即 `regionOwners.md`（《销售区域划分与职责说明》）。据该文档记载：\n\n- 公司销售区域划分为 **四个大区：East、West、South、North**；\n- 每个大区设 **一名区域销售经理**，负责区域业绩与审批；\n- 大区划分以 **客户注册地** 为准，跨区订单归属签约销售所在大区。\n\n但需要特别说明的是，**知识库中未能找到**以下用户所要求的关键细节：大区的正式全称/中文简称、按省份/城市/地域方位/分支机"
+    },
+    {
+      "id": "kb_row_limit",
+      "tag": "kb",
+      "passed": true,
+      "checks": {
+        "numbers": true
+      },
+      "latency_s": 59.59,
+      "tool_calls": 11,
+      "tool_errors": 0,
+      "llm_calls": 16,
+      "tokens_in": 50941,
+      "tokens_out": 12576,
+      "error": null,
+      "answer_preview": "# 数据分析查询单次返回行数上限——内部知识库核查报告\n\n## 结论摘要\n\n根据公司内部知识库检索结果，**数据分析类查询的单次返回行数上限为 200 行**。当需要超过 200 行的数据时，**必须走\"数据导出流程\"并留痕**，而不能通过单次查询直接返回。\n\n该结论的唯一权威出处为内部制度文档 **`dataPermission.md` 第 2 节「数据库访问原则」**，原文如下：\n\n> **单次查询返回行数上限为 200 行，需要更多数据时必须走数据导出流程并留痕。**\n\n需要特别说明的是：内部知识库中**未找到**任何关于\"导出/下载功能的导出行数上限\"以及\"分页设置（每页条数/分页大小"
+    },
+    {
+      "id": "kb_sla",
+      "tag": "kb",
+      "passed": true,
+      "checks": {
+        "numbers": true
+      },
+      "latency_s": 53.79,
+      "tool_calls": 7,
+      "tool_errors": 0,
+      "llm_calls": 11,
+      "tokens_in": 34915,
+      "tokens_out": 9344,
+      "error": null,
+      "answer_preview": "# 关于\"一级故障\"响应时限的内部知识库查询报告\n\n## 核心结论\n\n经过对公司内部知识库的全面检索，**未找到一份正式、独立的\"故障分级与 SLA 响应时限\"规范文档**（例如 ITIL 事件管理规范、运维管理制度或正式的 SLA 协议）。\n\n知识库中**唯一**涉及故障分级与响应时限的文件是 **《客户退款与售后处理规范》（`refundPolicy.md`）第 4 节「售后响应时效」**，其中规定：\n\n> **一级故障（服务不可用）：15 分钟内响应，4 小时内给出临时方案。**\n\n但需要特别强调的是：该条款属于**售后客服语境**下的响应时效规定，**并非**严格意义上的 IT/运维事"
+    }
+  ]
+}

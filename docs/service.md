@@ -64,6 +64,9 @@ curl -N localhost:8080/v1/tasks/<id>/events -H "Authorization: Bearer key-alice"
 
 These measure the service layer only; real latency is dominated by the LLM (tens of seconds per task).
 
+Usage accounting, daily token budgets, the admin dashboard and hybrid retrieval are described in
+[observability_and_rag.md](observability_and_rag.md).
+
 ## Limits & production notes
 
 * Checkpoints use a SQLite file (`ODR_CHECKPOINT_PATH`): fine for one host. Several hosts need the Postgres

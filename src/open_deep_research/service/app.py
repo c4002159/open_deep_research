@@ -14,22 +14,25 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import time
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
 import redis.asyncio as aioredis
 from redis.exceptions import RedisError
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
-from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from open_deep_research.service import store as S
+from open_deep_research.service.dashboard import DASHBOARD_HTML
 from open_deep_research.service.auth import AuthError, Authenticator
 from open_deep_research.service.ratelimit import SlidingWindowLimiter
 from open_deep_research.service.runner import GraphProvider, TaskRunner
 from open_deep_research.service.settings import Settings
 from open_deep_research.service.store import TaskStore
 from open_deep_research.service.worker import WorkerPool
+from open_deep_research.telemetry import estimate_cost
 
 PUBLIC_FIELDS = ("id", "state", "question", "created_at", "updated_at", "result", "error", "awaiting", "attempts")
 
@@ -96,8 +99,22 @@ def create_app(settings: Optional[Settings] = None, provider: Any = None, start_
             raise HTTPException(404, "task not found")
         return task
 
+    def cost_of(u: dict):
+        return estimate_cost(u.get("tokens_in", 0), u.get("tokens_out", 0), settings.price_in_per_m, settings.price_out_per_m)
+
+    def utc_day() -> str:
+        return time.strftime("%Y%m%d", time.gmtime())
+
     def public(task: dict) -> dict:
-        return {k: task[k] for k in PUBLIC_FIELDS if k in task}
+        out = {k: task[k] for k in PUBLIC_FIELDS if k in task}
+        if "usage" in task:
+            out["usage"] = {**task["usage"], "est_cost_usd": cost_of(task["usage"])}
+        return out
+
+    async def current_admin(user: str = Depends(current_user)) -> str:
+        if user not in settings.admins:
+            raise HTTPException(403, "admin only")
+        return user
 
     # ------------------------------------------------------------ endpoints
     @app.get("/healthz")
@@ -128,6 +145,16 @@ def create_app(settings: Optional[Settings] = None, provider: Any = None, start_
             existing = await st.find_idempotent(user, idempotency_key)
             if existing:
                 return await replay(existing)
+
+        if settings.daily_token_budget:
+            used = await st.usage_day(user, utc_day())
+            spent = used.get("tokens_in", 0) + used.get("tokens_out", 0)
+            if spent >= settings.daily_token_budget:
+                await metric(request, "budget_exceeded")
+                now = time.gmtime()
+                until_midnight = 86400 - (now.tm_hour * 3600 + now.tm_min * 60 + now.tm_sec)
+                raise HTTPException(429, f"daily token budget exhausted ({spent}/{settings.daily_token_budget})",
+                                    headers={"Retry-After": str(until_midnight)})
 
         decision = await request.app.state.limiter.hit(user)
         response.headers["X-RateLimit-Limit"] = str(settings.rate_limit_per_window)
@@ -213,11 +240,56 @@ def create_app(settings: Optional[Settings] = None, provider: Any = None, start_
         return StreamingResponse(stream(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
+    @app.get("/v1/usage")
+    async def my_usage(request: Request, days: int = 7, user: str = Depends(current_user)):
+        st: TaskStore = request.app.state.store
+        today = utc_day()
+        history = []
+        for i in range(max(1, min(days, 30))):
+            day = time.strftime("%Y%m%d", time.gmtime(time.time() - i * 86400))
+            u = await st.usage_day(user, day)
+            if u:
+                history.append({"day": day, **u, "est_cost_usd": cost_of(u)})
+        t = await st.usage_day(user, today)
+        spent = t.get("tokens_in", 0) + t.get("tokens_out", 0)
+        budget = settings.daily_token_budget or None
+        return {"today": {"day": today, **t, "est_cost_usd": cost_of(t)},
+                "budget": {"daily_tokens": budget, "remaining": None if budget is None else max(0, budget - spent)},
+                "history": history}
+
+    @app.get("/v1/admin/summary")
+    async def admin_summary(request: Request, admin: str = Depends(current_admin)):
+        st: TaskStore = request.app.state.store
+        day = utc_day()
+        users = []
+        for u in await st.users_with_usage(day):
+            d = await st.usage_day(u, day)
+            users.append({"user": u, **d, "est_cost_usd": cost_of(d)})
+        users.sort(key=lambda x: x.get("tokens_in", 0) + x.get("tokens_out", 0), reverse=True)
+        totals = await st.global_usage(day)
+        tools = [{"tool": t, **v, "error_rate": (v["errors"] / v["calls"]) if v["calls"] else 0.0}
+                 for t, v in sorted((await st.tool_stats()).items(), key=lambda kv: -kv[1]["calls"])]
+        raw = await request.app.state.redis.hgetall(f"{settings.prefix}metrics")
+        return {"day": day, "totals": {**totals, "est_cost_usd": cost_of(totals)}, "users": users, "tools": tools,
+                "latency": await st.latency_hist(), "counters": {k.decode(): int(v) for k, v in sorted(raw.items())},
+                "queue_depth": await request.app.state.redis.llen(st.queue_key)}
+
+    @app.get("/dashboard", response_class=HTMLResponse)
+    async def dashboard():
+        return DASHBOARD_HTML
+
     @app.get("/metrics", response_class=PlainTextResponse)
     async def metrics(request: Request):
         raw = await request.app.state.redis.hgetall(f"{settings.prefix}metrics")
         lines = [f"odr_{k.decode()} {int(v)}" for k, v in sorted(raw.items())]
         lines.append(f"odr_queue_depth {await request.app.state.redis.llen(request.app.state.store.queue_key)}")
+        st: TaskStore = request.app.state.store
+        g = await st.global_usage(utc_day())
+        lines += [f"odr_tokens_in_today {g.get('tokens_in', 0)}", f"odr_tokens_out_today {g.get('tokens_out', 0)}"]
+        for tool, v in (await st.tool_stats()).items():
+            lines += [f'odr_tool_calls_total{{tool="{tool}"}} {v["calls"]}', f'odr_tool_errors_total{{tool="{tool}"}} {v["errors"]}']
+        for bucket, n in (await st.latency_hist()).items():
+            lines.append(f'odr_task_latency_bucket{{le="{bucket[3:]}"}} {n}')
         return "\n".join(lines) + "\n"
 
     return app

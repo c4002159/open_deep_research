@@ -130,14 +130,14 @@ def _extra() -> list[dict]:
     # ---- knowledge base only
     kb = "（请查询公司内部知识库）"
     cs += [
-        case("kb_refund_30k", "kb", "一笔三万元的退款申请需要谁审批？" + kb, contains_all=["财务经理"]),
-        case("kb_refund_window", "kb", "客户收货后多少天内可以申请全额退款？" + kb, numbers=[30]),
-        case("kb_phone_mask", "kb", "客户手机号对外展示时要怎么脱敏？" + kb, contains_any=["前3位", "后4位", "前三位", "后四位"]),
-        case("kb_strategic_discount", "kb", "战略客户的折扣上限是多少？" + kb, contains_all=["15%"]),
-        case("kb_q2", "kb", "公司报表口径里，二季度包括哪几个月？" + kb, numbers=[4, 6]),
-        case("kb_row_limit", "kb", "数据分析查询单次最多返回多少行？" + kb, numbers=[200]),
-        case("kb_regions", "kb", "公司有哪几个销售大区？" + kb, contains_all=["East", "West", "South", "North"]),
-        case("kb_sla", "kb", "一级故障要在多长时间内响应？" + kb, numbers=[15]),
+        case("kb_refund_30k", "kb", "一笔三万元的退款申请需要谁审批？" + kb, contains_all=["财务经理"], cited_docs_exist=True),
+        case("kb_refund_window", "kb", "客户收货后多少天内可以申请全额退款？" + kb, numbers=[30], cited_docs_exist=True),
+        case("kb_phone_mask", "kb", "客户手机号对外展示时要怎么脱敏？" + kb, contains_any=["前3位", "后4位", "前三位", "后四位"], cited_docs_exist=True),
+        case("kb_strategic_discount", "kb", "战略客户的折扣上限是多少？" + kb, contains_all=["15%"], cited_docs_exist=True),
+        case("kb_q2", "kb", "公司报表口径里，二季度包括哪几个月？" + kb, numbers=[4, 6], cited_docs_exist=True),
+        case("kb_row_limit", "kb", "数据分析查询单次最多返回多少行？" + kb, numbers=[200], cited_docs_exist=True),
+        case("kb_regions", "kb", "公司有哪几个销售大区？" + kb, contains_all=["East", "West", "South", "North"], cited_docs_exist=True),
+        case("kb_sla", "kb", "一级故障要在多长时间内响应？" + kb, numbers=[15], cited_docs_exist=True),
     ]
 
     # ---- SQL + KB (needs both: rule from the KB, arithmetic over the data)

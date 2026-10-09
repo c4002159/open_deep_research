@@ -10,11 +10,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from typing import Any, Optional
 
 from langgraph.types import Command
 
 from open_deep_research.service import store as S
+from open_deep_research.telemetry import UsageTracker
 from open_deep_research.service.settings import Settings
 from open_deep_research.service.store import TaskStore
 
@@ -81,6 +83,8 @@ class TaskRunner:
             return
         owner, graph = task["owner"], self.provider.graph
         cfg = self._config(owner, task_id)
+        tracker = UsageTracker(trace_path=f"{self.settings.trace_dir}/{task_id}.jsonl", task_id=task_id)
+        cfg["callbacks"] = [tracker]
         try:
             resume = task.get("resume")
             if resume:
@@ -108,8 +112,23 @@ class TaskRunner:
         except Exception as e:                                    # noqa: BLE001 - report, never crash the worker
             logger.exception("task %s failed", task_id)
             await self._fail(task_id, f"{type(e).__name__}: {str(e)[:300]}")
+        finally:
+            # usage is recorded for every outcome (success, failure, pause, cancel, worker kill):
+            # tokens were spent either way, and the daily budget must see them
+            await asyncio.shield(self._record_usage(task_id, owner, tracker))
         # asyncio.CancelledError (the worker itself being killed) is deliberately NOT caught:
         # the task must stay RUNNING so the lease expires and another worker takes it over.
+
+    async def _record_usage(self, task_id: str, owner: str, tracker: UsageTracker) -> None:
+        try:
+            await self.store.record_usage(task_id, owner, tracker.summary(), time.strftime("%Y%m%d", time.gmtime()))
+        except Exception:                                         # noqa: BLE001 - never fail a task over bookkeeping
+            logger.exception("could not record usage for %s", task_id)
+
+    async def _observe_latency(self, task_id: str) -> None:
+        task = await self.store.get(task_id)
+        if task:
+            await self.store.observe_latency(max(0.0, time.time() - float(task["created_at"])))
 
     async def _run_with_cancel(self, task_id: str, graph: Any, graph_input: Any, cfg: dict) -> Optional[dict]:
         """Run the graph as a child task so a user's cancel request stops only that child."""
@@ -151,7 +170,9 @@ class TaskRunner:
     async def _finish(self, task_id: str, values: dict) -> None:
         if await self.store.transition(task_id, S.SUCCEEDED, result={"report": final_text(values)}):
             await self.store.add_event(task_id, "succeeded", {})
+            await self._observe_latency(task_id)
 
     async def _fail(self, task_id: str, error: str) -> None:
         if await self.store.transition(task_id, S.FAILED, error=error):
             await self.store.add_event(task_id, "failed", {"error": error})
+            await self._observe_latency(task_id)

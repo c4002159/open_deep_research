@@ -272,6 +272,28 @@ class Configuration(BaseModel):
         metadata={"x_oap_ui_config": {"type": "text",
                                       "description": "Optional backup model (e.g. 'deepseek:deepseek-chat') used when the research model keeps failing with timeouts, rate limits or 5xx errors."}},
     )
+    kb_retrieval_mode: str = Field(
+        default="hybrid",
+        metadata={"x_oap_ui_config": {"type": "select", "default": "hybrid",
+                                      "options": [{"label": "Hybrid (vector + BM25, RRF)", "value": "hybrid"},
+                                                  {"label": "Vector only", "value": "vector"}],
+                                      "description": "Knowledge-base retrieval strategy."}},
+    )
+    kb_top_k: int = Field(
+        default=3,
+        metadata={"x_oap_ui_config": {"type": "number", "default": 3, "min": 1, "max": 10,
+                                      "description": "Chunks returned per knowledge-base search."}},
+    )
+    kb_candidates: int = Field(
+        default=20,
+        metadata={"x_oap_ui_config": {"type": "number", "default": 20, "min": 5, "max": 100,
+                                      "description": "Candidates taken from each retriever before fusion."}},
+    )
+    kb_rerank: bool = Field(
+        default=False,
+        metadata={"x_oap_ui_config": {"type": "boolean", "default": False,
+                                      "description": "Cross-encoder rerank of the fused candidates (+~10 pts hit@1 but ~4 s/query on CPU)."}},
+    )
     schema_cache_ttl_s: float = Field(
         default=300.0,
         metadata={"x_oap_ui_config": {"type": "number", "default": 300, "min": 0, "max": 86400,

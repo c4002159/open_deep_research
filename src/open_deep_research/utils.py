@@ -38,6 +38,7 @@ from sqlalchemy import text as sql_text
 
 from open_deep_research.code_sandbox import format_for_agent, run_python_sandboxed
 from open_deep_research.configuration import Configuration, SearchAPI
+from open_deep_research.kb_retrieval import search as kb_search
 from open_deep_research.policy import fatal_denial, is_fatal_denial
 from open_deep_research.query_cache import QueryCache, get_cache, is_introspection
 from open_deep_research.sql_guard import ReadOnlyViolation, run_readonly_query
@@ -803,19 +804,18 @@ SEARCH_KB_DESCRIPTION = (
 
 @tool(description=SEARCH_KB_DESCRIPTION)
 async def search_knowledge_base(query: str, config: RunnableConfig = None) -> str:
-    """Semantic search over the internal document knowledge base."""
+    """Hybrid (dense + BM25) search over the internal document knowledge base."""
     try:
+        configurable = Configuration.from_runnable_config(config)
         vectorstore = _get_kb_vectorstore(config)
-        # 异步检索最相关的 3 个 chunk
-        results = await vectorstore.asimilarity_search(query, k=3)
-        if not results:
+        hits = await kb_search(
+            vectorstore, configurable.postgres_connection_string, query,
+            k=configurable.kb_top_k, mode=configurable.kb_retrieval_mode,
+            candidates=configurable.kb_candidates, rerank=configurable.kb_rerank,
+        )
+        if not hits:
             return "No relevant documents found in the knowledge base."
-
-        formatted = []
-        for doc in results:
-            source = doc.metadata.get("source", "unknown")
-            formatted.append(f"[来源: {source}]\n{doc.page_content}")
-        return "\n\n".join(formatted)
+        return "\n\n".join(f"[来源: {h.source}]\n{h.text}" for h in hits)
     except Exception as e:
         return f"Knowledge base search error: {str(e)}"
 

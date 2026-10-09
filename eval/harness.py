@@ -58,6 +58,12 @@ def score_text(checks: dict, output: str) -> dict:
         res["contains_all"] = all(_norm(s) in n for s in checks["contains_all"])
     if "contains_any" in checks:
         res["contains_any"] = any(_norm(s) in n for s in checks["contains_any"])
+    if checks.get("cited_docs_exist"):
+        # every knowledge-base document the answer cites must really exist (no fabricated sources)
+        from open_deep_research.citation_check import cited_documents
+
+        known = {p.name for p in (Path(__file__).resolve().parent.parent / "docs" / "internal_kb").glob("*.md")}
+        res["cited_docs_exist"] = all(d in known for d in cited_documents(output))
     return res
 
 
@@ -70,54 +76,7 @@ def db_fingerprint(db_url: Optional[str]) -> Optional[str]:
 
 
 # ------------------------------------------------------------------ tracing
-TOOL_ERROR_PREFIXES = (
-    "SQL execution error", "Query rejected", "Python execution error", "Python execution blocked",
-    "Error:", "[TOOL_UNAVAILABLE]", "Memory search error", "Memory save error", "Knowledge base search error",
-)
-
-
-class TraceHandler(BaseCallbackHandler):
-    """Collects tool calls and token usage across the whole (nested) graph run."""
-
-    def __init__(self) -> None:
-        self.tool_calls: list[dict] = []
-        self._starts: dict[Any, tuple[str, float]] = {}
-        self.llm_calls = 0
-        self.tokens_in = 0
-        self.tokens_out = 0
-
-    # tools
-    def on_tool_start(self, serialized, input_str, *, run_id, **kwargs):
-        name = (serialized or {}).get("name") or kwargs.get("name") or "unknown"
-        self._starts[run_id] = (name, time.perf_counter())
-
-    def on_tool_end(self, output, *, run_id, **kwargs):
-        name, t0 = self._starts.pop(run_id, ("unknown", time.perf_counter()))
-        text = getattr(output, "content", output)
-        text = text if isinstance(text, str) else str(text)
-        self.tool_calls.append({"tool": name, "ok": not text.startswith(TOOL_ERROR_PREFIXES),
-                                "seconds": round(time.perf_counter() - t0, 3)})
-
-    def on_tool_error(self, error, *, run_id, **kwargs):
-        name, t0 = self._starts.pop(run_id, ("unknown", time.perf_counter()))
-        self.tool_calls.append({"tool": name, "ok": False, "seconds": round(time.perf_counter() - t0, 3)})
-
-    # llm
-    def on_chat_model_start(self, serialized, messages, **kwargs):
-        self.llm_calls += 1
-
-    def on_llm_start(self, serialized, prompts, **kwargs):
-        self.llm_calls += 1
-
-    def on_llm_end(self, response, **kwargs):
-        usage = (response.llm_output or {}).get("token_usage") or {}
-        if not usage:
-            for gens in response.generations:
-                for g in gens:
-                    meta = getattr(getattr(g, "message", None), "usage_metadata", None) or {}
-                    usage = {"prompt_tokens": meta.get("input_tokens", 0), "completion_tokens": meta.get("output_tokens", 0)}
-        self.tokens_in += usage.get("prompt_tokens", 0) or usage.get("input_tokens", 0) or 0
-        self.tokens_out += usage.get("completion_tokens", 0) or usage.get("output_tokens", 0) or 0
+from open_deep_research.telemetry import TOOL_ERROR_PREFIXES, UsageTracker as TraceHandler  # noqa: E402,F401
 
 
 # ------------------------------------------------------------------ per-case result

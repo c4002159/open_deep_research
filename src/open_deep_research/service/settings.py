@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from typing import Optional
 
 
 def _parse_keys(raw: str) -> dict[str, str]:
@@ -47,6 +48,13 @@ class Settings:
 
     checkpoint_path: str = "data/checkpoints.sqlite"
 
+    # cost control & observability
+    daily_token_budget: int = 0                 # per user per UTC day; 0 disables
+    price_in_per_m: Optional[float] = None      # USD per million tokens - configure yours, we never guess
+    price_out_per_m: Optional[float] = None
+    admins: frozenset = frozenset()             # may open /dashboard and /v1/admin/summary
+    trace_dir: str = "logs/traces"
+
     @classmethod
     def from_env(cls) -> "Settings":
         e = os.environ.get
@@ -63,4 +71,9 @@ class Settings:
             approvers=frozenset(filter(None, e("ODR_APPROVERS", "").split(","))),
             owner_can_approve=e("ODR_OWNER_CAN_APPROVE", "0") == "1",
             checkpoint_path=e("ODR_CHECKPOINT_PATH", cls.checkpoint_path),
+            daily_token_budget=int(e("ODR_DAILY_TOKEN_BUDGET", 0)),
+            price_in_per_m=float(e("ODR_PRICE_IN_PER_M")) if e("ODR_PRICE_IN_PER_M") else None,
+            price_out_per_m=float(e("ODR_PRICE_OUT_PER_M")) if e("ODR_PRICE_OUT_PER_M") else None,
+            admins=frozenset(filter(None, e("ODR_ADMINS", "").split(","))),
+            trace_dir=e("ODR_TRACE_DIR", cls.trace_dir),
         )

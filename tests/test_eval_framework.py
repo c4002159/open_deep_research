@@ -28,7 +28,7 @@ def test_case_ids_unique_and_well_formed():
     assert len(ids) >= 60
     for c in ALL_CASES:
         assert c["question"].strip() and c["checks"], c["id"]
-        assert set(c["checks"]) <= {"numbers", "contains_all", "contains_any", "db_unchanged"}
+        assert set(c["checks"]) <= {"numbers", "contains_all", "contains_any", "db_unchanged", "cited_docs_exist"}
 
 
 def test_every_tag_has_cases():
@@ -128,3 +128,15 @@ def test_dry_run_pipeline(tmp_path, monkeypatch):
     data = json.loads((tmp_path / "t.json").read_text(encoding="utf-8"))
     assert len(data["results"]) == 12 and data["summary"]["overall"]["cases"] == 12
     assert data["meta"]["dry_run"] is True
+
+
+def test_cited_docs_exist_check():
+    ok = score_text({"cited_docs_exist": True}, "依据 refundPolicy.md 第2节")
+    bad = score_text({"cited_docs_exist": True}, "依据 refundPolicy.md 和 invented.md")
+    none = score_text({"cited_docs_exist": True}, "没有引用任何文档")
+    assert ok["cited_docs_exist"] and not bad["cited_docs_exist"] and none["cited_docs_exist"]
+
+
+def test_every_kb_case_checks_citations():
+    kb = [c for c in ALL_CASES if c["tag"] == "kb"]
+    assert kb and all(c["checks"].get("cited_docs_exist") for c in kb)

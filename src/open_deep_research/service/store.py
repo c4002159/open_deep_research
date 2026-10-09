@@ -121,6 +121,9 @@ class TaskStore:
             if d.get(k):
                 d[k] = json.loads(d[k])
         d["attempts"] = int(d.get("attempts", 0))
+        usage = {k[2:]: float(d.pop(k)) if k == "u_seconds" else int(d.pop(k)) for k in [k for k in d if k.startswith("u_")]}
+        if usage:
+            d["usage"] = usage
         return d
 
     async def list_for_user(self, owner: str, limit: int = 20) -> list[str]:
@@ -225,6 +228,61 @@ class TaskStore:
             await self.add_event(tid, "requeued", {"reason": "worker lease expired"})
             requeued.append(tid)
         return {"requeued": requeued, "failed": failed}
+
+    # ---- usage, tool stats, latency (observability / cost control)
+    def _usage_key(self, owner: str, day: str) -> str:
+        return f"{self.p}usage:{owner}:{day}"
+
+    async def record_usage(self, tid: str, owner: str, usage: dict, day: str) -> None:
+        """Add one run's usage to the task, the user's daily totals and the global tool statistics."""
+        fields = {"tokens_in": usage["tokens_in"], "tokens_out": usage["tokens_out"], "llm_calls": usage["llm_calls"],
+                  "tool_calls": usage["tool_calls"], "tool_errors": usage["tool_errors"]}
+        async with self.r.pipeline(transaction=False) as pipe:
+            for k, v in fields.items():
+                pipe.hincrby(self._task(tid), f"u_{k}", v)
+                pipe.hincrby(self._usage_key(owner, day), k, v)
+                pipe.hincrby(f"{self.p}usage:all:{day}", k, v)
+            pipe.hincrbyfloat(self._task(tid), "u_seconds", usage["seconds"])
+            pipe.hincrby(self._usage_key(owner, day), "runs", 1)
+            pipe.expire(self._usage_key(owner, day), 45 * 86400)
+            pipe.expire(f"{self.p}usage:all:{day}", 45 * 86400)
+            pipe.sadd(f"{self.p}usage_users:{day}", owner)
+            pipe.expire(f"{self.p}usage_users:{day}", 45 * 86400)
+            for tool, st in usage["by_tool"].items():
+                pipe.hincrby(f"{self.p}toolstats", f"{tool}|calls", st["calls"])
+                pipe.hincrby(f"{self.p}toolstats", f"{tool}|errors", st["errors"])
+            await pipe.execute()
+
+    async def usage_day(self, owner: str, day: str) -> dict:
+        raw = await self.r.hgetall(self._usage_key(owner, day))
+        return {(k.decode() if isinstance(k, bytes) else k): int(v) for k, v in raw.items()}
+
+    async def users_with_usage(self, day: str) -> list[str]:
+        return sorted((m.decode() if isinstance(m, bytes) else m) for m in await self.r.smembers(f"{self.p}usage_users:{day}"))
+
+    async def global_usage(self, day: str) -> dict:
+        raw = await self.r.hgetall(f"{self.p}usage:all:{day}")
+        return {(k.decode() if isinstance(k, bytes) else k): int(v) for k, v in raw.items()}
+
+    async def tool_stats(self) -> dict:
+        raw = await self.r.hgetall(f"{self.p}toolstats")
+        out: dict = {}
+        for k, v in raw.items():
+            k = k.decode() if isinstance(k, bytes) else k
+            tool, _, kind = k.partition("|")
+            out.setdefault(tool, {"calls": 0, "errors": 0})[kind] = int(v)
+        return out
+
+    LAT_BUCKETS = (5, 15, 30, 60, 120, 300, 900)
+
+    async def observe_latency(self, seconds: float) -> None:
+        bucket = next((f"le_{b}" for b in self.LAT_BUCKETS if seconds <= b), "le_inf")
+        await self.r.hincrby(f"{self.p}latency", bucket, 1)
+
+    async def latency_hist(self) -> dict:
+        raw = await self.r.hgetall(f"{self.p}latency")
+        got = {(k.decode() if isinstance(k, bytes) else k): int(v) for k, v in raw.items()}
+        return {f"le_{b}": got.get(f"le_{b}", 0) for b in self.LAT_BUCKETS} | {"le_inf": got.get("le_inf", 0)}
 
     async def bump_attempts(self, tid: str) -> int:
         return int(await self.r.hincrby(self._task(tid), "attempts", 1))
