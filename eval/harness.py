@@ -143,6 +143,9 @@ def aggregate(results: list[dict]) -> dict:
             "latency_p50_s": _pct(lat, 50),
             "latency_p95_s": _pct(lat, 95),
             "infra_errors": sum(1 for r in rs if r["error"]),
+            # a provider outage must not masquerade as the agent getting answers wrong
+            "success_rate_excl_infra": (round(sum(r["passed"] for r in rs if not r["error"]) /
+                                              max(1, sum(1 for r in rs if not r["error"])), 3)),
         }
 
     tags = sorted({r["tag"] for r in results})

@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -53,8 +54,26 @@ async def _fake_invoke(case: dict, config: dict) -> str:
     return " ".join(parts) or "ok"
 
 
-async def run_one(case: dict, invoke, sem: asyncio.Semaphore, db_url: str | None) -> dict:
+PROVIDER_FATAL = re.compile(r"error code: 40[12]|insufficient[ _]balance|insufficient_quota|invalid_api_key|incorrect api key|authentication", re.I)
+MAX_CONSECUTIVE_PROVIDER_FAILURES = 3
+
+
+class Abort:
+    """Shared across concurrent cases: set once the model provider is evidently unusable."""
+
+    def __init__(self) -> None:
+        self.consecutive = 0
+        self.reason = ""
+
+    @property
+    def tripped(self) -> bool:
+        return self.consecutive >= MAX_CONSECUTIVE_PROVIDER_FAILURES
+
+
+async def run_one(case: dict, invoke, sem: asyncio.Semaphore, db_url: str | None, abort: Abort | None = None) -> dict | None:
     async with sem:
+        if abort is not None and abort.tripped:
+            return None                       # not run, not recorded -> a resume will run it
         trace = TraceHandler()
         config = {"callbacks": [trace], "configurable": {
             "thread_id": f"eval-{case['id']}", "allow_clarification": False,
@@ -66,6 +85,12 @@ async def run_one(case: dict, invoke, sem: asyncio.Semaphore, db_url: str | None
             answer = await invoke(case, config)
         except Exception as e:  # infrastructure failure: record it, keep going
             error = f"{type(e).__name__}: {str(e)[:300]}"
+        if abort is not None:
+            if error and PROVIDER_FATAL.search(error):
+                abort.consecutive += 1
+                abort.reason = error[:200]
+            else:
+                abort.consecutive = 0
         res = build_result(case, answer, trace, time.perf_counter() - t0, before, db_fingerprint(db_url), error)
         print(f"  {'PASS' if res.passed else 'FAIL'}  {case['id']:<28} {res.latency_s:>6.1f}s  tools={res.tool_calls}(err {res.tool_errors})")
         return res.to_dict()
@@ -86,7 +111,8 @@ async def main_async(args) -> int:
     RESULTS.mkdir(parents=True, exist_ok=True)
     done: dict[str, dict] = {}
     if out_path.exists() and not args.force:
-        done = {r["id"]: r for r in json.loads(out_path.read_text(encoding="utf-8"))["results"]}
+        # cases that died of an infrastructure error (provider outage, no credit...) are NOT finished work
+        done = {r["id"]: r for r in json.loads(out_path.read_text(encoding="utf-8"))["results"] if not r.get("error")}
     todo = [c for c in cases if c["id"] not in done]
     print(f"{len(cases)} selected, {len(done)} cached, {len(todo)} to run (concurrency {args.concurrency})")
 
@@ -101,12 +127,23 @@ async def main_async(args) -> int:
         out_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
         return report
 
+    abort = Abort()
+
     async def run_and_save(c: dict) -> None:
-        done[c["id"]] = await run_one(c, invoke, sem, db_url)
+        res = await run_one(c, invoke, sem, db_url, abort)
+        if res is None:
+            return
+        if res.get("error") and PROVIDER_FATAL.search(res["error"]):
+            return                            # provider outage / bad key: not a result, a resume will run it
+        done[c["id"]] = res
         save()  # persist after every case so an interrupted run loses nothing
 
     await asyncio.gather(*(run_and_save(c) for c in todo))
     report = save()
+    if abort.tripped:
+        print(f"\n!! ABORTED: the model provider failed {MAX_CONSECUTIVE_PROVIDER_FAILURES} times in a row "
+              f"({abort.reason}).\n!! Fix it (top up credit / check the key), then re-run the same command: "
+              f"finished cases are cached and only the missing ones run.")
 
     o = report["summary"]["overall"]
     print(f"\n=== {args.name}: {o['cases']} cases ===")

@@ -140,3 +140,80 @@ def test_cited_docs_exist_check():
 def test_every_kb_case_checks_citations():
     kb = [c for c in ALL_CASES if c["tag"] == "kb"]
     assert kb and all(c["checks"].get("cited_docs_exist") for c in kb)
+
+
+# ------------------------------------------------------------ provider outages must not look like wrong answers
+def _args(name, **kw):
+    class A:
+        tags = ids = limit = None
+        concurrency, force, dry_run = 1, False, True
+
+    A.name = name
+    for k, v in kw.items():
+        setattr(A, k, v)
+    return A
+
+
+def test_runner_aborts_when_the_provider_is_down_and_records_nothing(tmp_path, monkeypatch):
+    import asyncio
+
+    import eval.run_agent_eval as runner
+
+    monkeypatch.setattr(runner, "RESULTS", tmp_path)
+    calls = []
+
+    async def dead_provider(case, config):
+        calls.append(case["id"])
+        raise RuntimeError("APIStatusError: Error code: 402 - {'error': {'message': 'Insufficient Balance'}}")
+
+    monkeypatch.setattr(runner, "_fake_invoke", dead_provider)
+    asyncio.run(runner.main_async(_args("outage", limit=20)))
+    assert len(calls) == runner.MAX_CONSECUTIVE_PROVIDER_FAILURES, "must stop after N consecutive provider failures"
+    data = json.loads((tmp_path / "outage.json").read_text(encoding="utf-8"))
+    assert data["results"] == [], "an outage is not a result: nothing may be recorded as pass/fail"
+
+
+def test_resume_reruns_cases_that_died_of_infrastructure_errors(tmp_path, monkeypatch):
+    import asyncio
+
+    import eval.run_agent_eval as runner
+
+    monkeypatch.setattr(runner, "RESULTS", tmp_path)
+    first = ALL_CASES[0]["id"]
+    second = ALL_CASES[1]["id"]
+    seen = []
+    real = runner._fake_invoke
+
+    async def spy(case, config):
+        seen.append(case["id"])
+        return await real(case, config)
+
+    monkeypatch.setattr(runner, "_fake_invoke", spy)
+    (tmp_path / "r.json").write_text(json.dumps({"results": [
+        {"id": first, "tag": "simple", "passed": True, "error": None, "latency_s": 1, "tool_calls": 0, "tool_errors": 0,
+         "llm_calls": 0, "tokens_in": 0, "tokens_out": 0},
+        {"id": second, "tag": "simple", "passed": False, "error": "APIStatusError: Error code: 402", "latency_s": 1,
+         "tool_calls": 0, "tool_errors": 0, "llm_calls": 0, "tokens_in": 0, "tokens_out": 0},
+    ]}), encoding="utf-8")
+    asyncio.run(runner.main_async(_args("r", ids=[first, second])))
+    assert seen == [second], "the finished case is cached, the infrastructure failure is retried"
+
+
+def test_provider_error_detection_has_no_false_positives_on_ids():
+    from eval.run_agent_eval import PROVIDER_FATAL
+
+    assert PROVIDER_FATAL.search("APIStatusError: Error code: 402 - Insufficient Balance")
+    assert PROVIDER_FATAL.search("AuthenticationError: Incorrect API key provided")
+    assert not PROVIDER_FATAL.search("request_id: 4402abc-4012 took 1402 ms")        # digits inside ids/numbers
+    assert not PROVIDER_FATAL.search("SQL execution error: no such column")
+
+
+def test_success_rate_is_reported_excluding_infrastructure_failures():
+    rows = [_res_row(True), _res_row(True), _res_row(False), _res_row(False, error="402")]
+    o = aggregate(rows)["overall"]
+    assert o["task_success_rate"] == 0.5 and o["infra_errors"] == 1 and o["success_rate_excl_infra"] == 0.667
+
+
+def _res_row(passed, error=None):
+    return {"id": "x", "tag": "t", "passed": passed, "latency_s": 1.0, "tool_calls": 0, "tool_errors": 0,
+            "llm_calls": 0, "tokens_in": 0, "tokens_out": 0, "error": error}

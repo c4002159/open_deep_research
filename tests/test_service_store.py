@@ -177,3 +177,36 @@ async def test_events_are_ordered_and_resumable(r, p):
     assert [e[2]["n"] for e in first] == [0, 1, 2]
     rest = await st.read_events(t, ids[0], block_ms=100)     # resume after the first event
     assert [e[2]["n"] for e in rest] == [1, 2]
+
+
+@with_redis
+async def test_state_and_payload_change_atomically(r, p):
+    """A reader hammering the task while it transitions must never see the new state without its payload."""
+    st = mk(r, p)
+    t = (await submit(st)).task_id
+    await st.transition(t, S.RUNNING)
+    seen_bad = []
+    stop = asyncio.Event()
+
+    async def reader():
+        while not stop.is_set():
+            got = await st.get(t)
+            if got["state"] == "succeeded" and "result" not in got:
+                seen_bad.append(got)
+            await asyncio.sleep(0)
+
+    task = asyncio.create_task(reader())
+    await asyncio.sleep(0.05)
+    assert await st.transition(t, S.SUCCEEDED, result={"report": "x"})
+    await asyncio.sleep(0.2)
+    stop.set()
+    await task
+    assert seen_bad == [] and (await st.get(t))["result"] == {"report": "x"}
+
+
+@with_redis
+async def test_failed_transition_writes_no_payload(r, p):
+    st = mk(r, p)
+    t = (await submit(st)).task_id
+    assert not await st.transition(t, S.SUCCEEDED, result={"report": "leak"})    # queued -> succeeded is illegal
+    assert "result" not in await st.get(t), "a rejected transition must not leave payload fields behind"

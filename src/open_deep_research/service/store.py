@@ -53,13 +53,18 @@ return {'CREATED', ARGV[2]}
 """
 
 _TRANSITION = """
--- KEYS: 1 task  2 active-set    ARGV: 1 to_state  2 now  3 task_id  4 terminal(0/1)  5.. allowed-from states
+-- KEYS: 1 task  2 active-set
+-- ARGV: 1 to_state  2 now  3 task_id  4 terminal(0/1)  5 n_allowed  6..5+n allowed-from states  then field,value pairs
+-- The state change and its payload fields (result / error / awaiting ...) are ONE atomic step, so a
+-- reader can never observe "succeeded" without its result or "awaiting_approval" without its request.
 local cur = redis.call('HGET', KEYS[1], 'state')
 if not cur then return 0 end
+local n = tonumber(ARGV[5])
 local ok = false
-for i = 5, #ARGV do if ARGV[i] == cur then ok = true end end
+for i = 6, 5 + n do if ARGV[i] == cur then ok = true end end
 if not ok then return 0 end
 redis.call('HSET', KEYS[1], 'state', ARGV[1], 'updated_at', ARGV[2])
+for i = 6 + n, #ARGV, 2 do redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 1]) end
 if ARGV[4] == '1' then redis.call('SREM', KEYS[2], ARGV[3]) else redis.call('SADD', KEYS[2], ARGV[3]) end
 return 1
 """
@@ -139,14 +144,15 @@ class TaskStore:
         task = self._task(tid)
         owner = (await self.r.hget(task, "owner")) or b""
         owner = owner.decode() if isinstance(owner, bytes) else owner
+        allowed = sorted(only_from or ALLOWED_FROM[to])
+        payload: list[str] = []
+        for k, v in fields.items():
+            if v is not None:
+                payload += [k, json.dumps(v) if isinstance(v, (dict, list)) else str(v)]
         ok = await self._transition(
             keys=[task, self._active(owner)],
-            args=[to, time.time(), tid, "1" if to in TERMINAL else "0", *sorted(only_from or ALLOWED_FROM[to])],
+            args=[to, time.time(), tid, "1" if to in TERMINAL else "0", len(allowed), *allowed, *payload],
         )
-        if ok and fields:
-            enc = {k: json.dumps(v) if isinstance(v, (dict, list)) else str(v) for k, v in fields.items() if v is not None}
-            if enc:
-                await self.r.hset(task, mapping=enc)
         return bool(ok)
 
     async def set_field(self, tid: str, **fields: Any) -> None:
