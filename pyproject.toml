@@ -102,3 +102,8 @@ lint.ignore = [
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+[tool.pytest.ini_options]
+# `eval/` and `tests/` live at the repo root and are imported by the tests. `python -m pytest` happens to put the
+# current directory on sys.path, the bare `pytest` command (what CI runs) does not - so say it explicitly.
+pythonpath = ["."]
