@@ -69,6 +69,12 @@ Usage accounting, daily token budgets, the admin dashboard and hybrid retrieval 
 
 ## Limits & production notes
 
+* **Code sandbox needs Docker.** `python_executor` runs in a container (no network, 256 MB, non-root) and
+  *refuses to execute* if no Docker daemon is reachable - the in-process restrictions are not a security
+  boundary. Build the image with `docker build -t agent-sandbox-python:latest -f docker/sandbox.Dockerfile .`.
+  For local development only, `CODE_SANDBOX_BACKEND=auto` falls back to a weaker subprocess sandbox.
+* Point `INTERNAL_DB_URL` at a **read-only database account** as well; the SQL guard and read-only
+  connection are defence in depth, a DB-level grant is the real boundary.
 * Checkpoints use a SQLite file (`ODR_CHECKPOINT_PATH`): fine for one host. Several hosts need the Postgres
   checkpointer, otherwise a task re-delivered to another machine has no checkpoint and restarts.
 * Task state lives in Redis with a TTL (7 days). It is a work queue, not a system of record.

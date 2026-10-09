@@ -190,3 +190,41 @@ def test_code_denial_fatality(code, fatal):
     res = run_python_sandboxed_sync(code, timeout=5, backend="subprocess")
     assert res.blocked and res.fatal is fatal
     assert is_fatal_denial(format_for_agent(res)) is fatal
+
+
+# ------------------------------------------------------------ the container is REQUIRED by default (fail closed)
+@pytest.fixture()
+def no_docker(monkeypatch):
+    import open_deep_research.code_sandbox as cs
+
+    monkeypatch.setattr(cs, "docker_available", lambda: False)
+    monkeypatch.delenv("CODE_SANDBOX_BACKEND", raising=False)
+    return cs
+
+
+def test_default_refuses_to_execute_without_docker(no_docker):
+    marker = "print('SHOULD_NOT_RUN')\nresult = 1"
+    res = run_python_sandboxed_sync(marker, timeout=5)
+    assert res.blocked and not res.ok and res.stdout == "" and res.backend == "none"
+    msg = format_for_agent(res)
+    assert "Docker" in msg and "SHOULD_NOT_RUN" not in msg and "Do not retry" in msg
+
+
+def test_auto_mode_is_an_explicit_dev_fallback(no_docker, monkeypatch):
+    monkeypatch.setenv("CODE_SANDBOX_BACKEND", "auto")
+    res = run_python_sandboxed_sync("result = 2 + 2", timeout=20)
+    assert res.ok and res.backend == "subprocess" and "result = 4" in format_for_agent(res)
+
+
+def test_subprocess_mode_never_needs_docker(no_docker, monkeypatch):
+    monkeypatch.setenv("CODE_SANDBOX_BACKEND", "subprocess")
+    assert no_docker.resolve_backend() == "subprocess"
+
+
+def test_docker_is_chosen_when_available(monkeypatch):
+    import open_deep_research.code_sandbox as cs
+
+    monkeypatch.setattr(cs, "docker_available", lambda: True)
+    for mode in ("docker", "auto"):
+        monkeypatch.setenv("CODE_SANDBOX_BACKEND", mode)
+        assert cs.resolve_backend() == "docker"

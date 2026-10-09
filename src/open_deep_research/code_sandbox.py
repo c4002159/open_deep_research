@@ -8,14 +8,17 @@ Layers (outermost first):
 2. Process isolation: code runs in a separate interpreter with an empty
    environment (no API keys), a temp working directory, a wall-clock timeout and an
    output cap, using restricted builtins and an import allow-list.
-3. Container isolation (preferred): when a Docker daemon is reachable the code runs
-   inside llm-sandbox with no network, a memory cap and a CPU cap.
+3. Container isolation: the code runs inside llm-sandbox with no network, a memory
+   cap, a CPU cap, a non-root user and no-new-privileges.
 
-Backend is chosen by ``CODE_SANDBOX_BACKEND`` = ``auto`` (default) | ``docker`` |
-``subprocess``. ``docker`` fails closed if the daemon is unavailable. Layers 1-2
-are defence in depth, not a security boundary: in-process Python restrictions can
-be bypassed by a determined attacker, which is why the container is the real
-boundary and ``auto`` logs a warning when it has to fall back.
+Layers 1-2 are defence in depth, NOT a security boundary: in-process Python restrictions
+can be bypassed by a determined attacker. The container is the boundary, so it is
+REQUIRED by default and the tool refuses to run code when no Docker daemon is reachable.
+``CODE_SANDBOX_BACKEND`` selects the behaviour:
+
+  docker      (default) container only; refuse to execute if Docker is unavailable
+  auto        container if available, otherwise the subprocess fallback + a warning (development)
+  subprocess  always the subprocess fallback (tests, machines without Docker; weaker isolation)
 """
 
 from __future__ import annotations
@@ -282,18 +285,23 @@ def docker_available() -> bool:
     return ok
 
 
+class SandboxUnavailable(RuntimeError):
+    """The required isolation is not available; code must not be executed."""
+
+
 def resolve_backend() -> str:
-    choice = os.environ.get("CODE_SANDBOX_BACKEND", "auto").lower()
-    if choice == "docker":
-        if not docker_available():
-            raise RuntimeError("CODE_SANDBOX_BACKEND=docker but no Docker daemon is reachable")
-        return "docker"
+    choice = os.environ.get("CODE_SANDBOX_BACKEND", "docker").lower()
     if choice == "subprocess":
         return "subprocess"
     if docker_available():
         return "docker"
-    logger.warning("Docker unavailable; falling back to the subprocess sandbox (weaker isolation)")
-    return "subprocess"
+    if choice == "auto":
+        logger.warning("Docker unavailable; falling back to the subprocess sandbox (weaker isolation)")
+        return "subprocess"
+    raise SandboxUnavailable(
+        "the code sandbox needs a running Docker daemon (and the agent-sandbox-python image) and none is "
+        "reachable, so no code was executed. Start Docker, or for local development only set "
+        "CODE_SANDBOX_BACKEND=auto (falls back to a weaker subprocess sandbox). Do not retry")
 
 
 def run_python_sandboxed_sync(code: str, timeout: float = 20.0, backend: Optional[str] = None) -> SandboxResult:
@@ -304,7 +312,7 @@ def run_python_sandboxed_sync(code: str, timeout: float = 20.0, backend: Optiona
                              fatal=getattr(e, "fatal", True))
     try:
         backend = backend or resolve_backend()
-    except RuntimeError as e:
+    except SandboxUnavailable as e:
         return SandboxResult(False, error=str(e), backend="none", blocked=True)
     return _run_docker(code, timeout) if backend == "docker" else _run_subprocess(code, timeout)
 
