@@ -1,0 +1,39 @@
+{
+  "1_throughput": {
+    "tasks": 600,
+    "submit_rps": 228,
+    "end_to_end_tasks_per_s": 96.2,
+    "submit_p50_ms": 179.4,
+    "submit_p95_ms": 791.9,
+    "submit_p99_ms": 1178.2,
+    "succeeded": 600,
+    "unfinished": 0,
+    "server_metrics": "odr_submitted 600 odr_queue_depth 0",
+    "total_seconds": 6.24
+  },
+  "2_rate_limit": {
+    "requests": 100,
+    "limit_per_minute": 10,
+    "accepted_202": 10,
+    "throttled_429": 90,
+    "all_429_have_retry_after": true,
+    "other_user_unaffected": true
+  },
+  "3_idempotency_storm": {
+    "concurrent_requests": 300,
+    "created_202": 1,
+    "replayed_200": 299,
+    "distinct_task_ids": 1,
+    "agent_executions": 1
+  },
+  "4_worker_crash": {
+    "tasks": 100,
+    "succeeded": 100,
+    "lost_or_unfinished": 0,
+    "node_a_runs": 101,
+    "node_c_runs": 104,
+    "redundant_node_a_runs": 1,
+    "redundant_node_c_runs": 4,
+    "note": "runs beyond 100 are at-least-once redeliveries of tasks that were in flight at the crash"
+  }
+}

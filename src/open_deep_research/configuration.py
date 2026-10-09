@@ -246,6 +246,92 @@ class Configuration(BaseModel):
         }
     )
     
+    # ---- Reliability & safety (stage 3)
+    tool_timeout_s: float = Field(
+        default=90.0,
+        metadata={"x_oap_ui_config": {"type": "number", "default": 90, "min": 1, "max": 600,
+                                      "description": "Wall-clock timeout for a single tool call."}},
+    )
+    tool_max_retries: int = Field(
+        default=2,
+        metadata={"x_oap_ui_config": {"type": "number", "default": 2, "min": 0, "max": 5,
+                                      "description": "Retries (exponential backoff + jitter) for transient failures of idempotent tools."}},
+    )
+    breaker_failure_threshold: int = Field(
+        default=3,
+        metadata={"x_oap_ui_config": {"type": "number", "default": 3, "min": 1, "max": 50,
+                                      "description": "Consecutive failed calls (after retries) before a tool's circuit opens."}},
+    )
+    breaker_cooldown_s: float = Field(
+        default=15.0,
+        metadata={"x_oap_ui_config": {"type": "number", "default": 15, "min": 1, "max": 600,
+                                      "description": "Seconds an open circuit waits before allowing one probe call."}},
+    )
+    fallback_model: Optional[str] = Field(
+        default=None,
+        metadata={"x_oap_ui_config": {"type": "text",
+                                      "description": "Optional backup model (e.g. 'deepseek:deepseek-chat') used when the research model keeps failing with timeouts, rate limits or 5xx errors."}},
+    )
+    kb_tool_call_budget: int = Field(
+        default=6,
+        metadata={"x_oap_ui_config": {"type": "number", "default": 6, "min": 1, "max": 30,
+                                      "description": "Max total tool calls (parallel calls counted individually) for one knowledge_base researcher; 0 = unlimited."}},
+    )
+    analyst_tool_call_budget: int = Field(
+        default=10,
+        metadata={"x_oap_ui_config": {"type": "number", "default": 10, "min": 1, "max": 30,
+                                      "description": "Max total tool calls for one data_analyst researcher; 0 = unlimited."}},
+    )
+    kb_retrieval_mode: str = Field(
+        default="hybrid",
+        metadata={"x_oap_ui_config": {"type": "select", "default": "hybrid",
+                                      "options": [{"label": "Hybrid (vector + BM25, RRF)", "value": "hybrid"},
+                                                  {"label": "Vector only", "value": "vector"}],
+                                      "description": "Knowledge-base retrieval strategy."}},
+    )
+    kb_top_k: int = Field(
+        default=3,
+        metadata={"x_oap_ui_config": {"type": "number", "default": 3, "min": 1, "max": 10,
+                                      "description": "Chunks returned per knowledge-base search."}},
+    )
+    kb_candidates: int = Field(
+        default=20,
+        metadata={"x_oap_ui_config": {"type": "number", "default": 20, "min": 5, "max": 100,
+                                      "description": "Candidates taken from each retriever before fusion."}},
+    )
+    kb_rerank: bool = Field(
+        default=False,
+        metadata={"x_oap_ui_config": {"type": "boolean", "default": False,
+                                      "description": "Cross-encoder rerank of the fused candidates (+~10 pts hit@1 but ~4 s/query on CPU)."}},
+    )
+    schema_cache_ttl_s: float = Field(
+        default=300.0,
+        metadata={"x_oap_ui_config": {"type": "number", "default": 300, "min": 0, "max": 86400,
+                                      "description": "Seconds to cache schema-introspection query results (0 disables). Business-data queries are never cached."}},
+    )
+    enable_request_triage: bool = Field(
+        default=True,
+        metadata={"x_oap_ui_config": {"type": "boolean", "default": True,
+                                      "description": "Refuse requests to modify/delete/export data or override the rules before any research starts (no LLM call)."}},
+    )
+    approval_mode: str = Field(
+        default="interrupt",
+        metadata={"x_oap_ui_config": {"type": "select", "default": "interrupt",
+                                      "options": [{"label": "Pause for human approval", "value": "interrupt"},
+                                                  {"label": "Auto-approve (evals/batch)", "value": "auto_approve"},
+                                                  {"label": "Deny sensitive queries", "value": "deny"}],
+                                      "description": "What to do when a tool call needs human approval (row-level order data)."}},
+    )
+    approval_row_limit: int = Field(
+        default=10,
+        metadata={"x_oap_ui_config": {"type": "number", "default": 10, "min": 1, "max": 200,
+                                      "description": "Row-level queries on the sales table returning more rows than this need approval."}},
+    )
+    approval_log_path: str = Field(
+        default="logs/approvals.jsonl",
+        metadata={"x_oap_ui_config": {"type": "text", "description": "Append-only JSONL audit log of approval decisions."}},
+    )
+
     mem0_api_key: Optional[str] = Field(
         default=None,
         optional=True,
@@ -291,6 +377,10 @@ class Configuration(BaseModel):
             field_name: os.environ.get(field_name.upper(), configurable.get(field_name))
             for field_name in field_names
         }
+        # per-user identity must come from the authenticated request, never from a process-wide
+        # environment variable - otherwise one MEM0_USER_ID would silently share memory across users
+        if configurable.get("mem0_user_id"):
+            values["mem0_user_id"] = configurable["mem0_user_id"]
         return cls(**{k: v for k, v in values.items() if v is not None})
 
     class Config:

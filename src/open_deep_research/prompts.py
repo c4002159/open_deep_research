@@ -54,6 +54,11 @@ Today's date is {date}.
 You will return a single research question that will be used to guide the research.
 
 Guidelines:
+0. Match the Scope of the Question (applies first, and overrides guidelines 1-3 when it applies)
+- If the user asks a NARROW LOOKUP -- one rule, one number, one definition, one record count, or "what does our policy say about X" -- the research question must stay that narrow. Restate the question, name the source to use (for example "the company's internal knowledge base" or "the internal sales database"), and stop.
+- Do NOT add sub-questions, scenarios, role differences, legal/compliance background, technical implementation, version or effective-date requirements, or "also check..." items that the user did not ask for.
+- Only open-ended research tasks (comparisons, market or literature reviews, "analyse", "compare", "everything about") should be expanded with the dimensions described below.
+
 1. Maximize Specificity and Detail
 - Include all known user preferences and explicitly list key attributes or dimensions to consider.
 - It is important that all details from the user are included in the instructions.
@@ -123,6 +128,7 @@ After each ConductResearch tool call, use think_tool to analyze the results:
 <Scaling Rules>
 **Simple fact-finding, lists, and rankings** can use a single sub-agent:
 - *Example*: List the top 10 coffee shops in San Francisco → Use 1 sub-agent
+- *Example*: "What does our policy say about masking customer phone numbers?" or "How many sales records are there?" → exactly 1 sub-agent (knowledge_base / data_analyst) with the question as asked. Never split a single-document or single-query lookup into several agents.
 
 **Comparisons presented in the user request** can use a sub-agent for each element of the comparison:
 - *Example*: Compare OpenAI vs. Anthropic vs. DeepMind approaches to AI safety → Use 3 sub-agents
@@ -385,13 +391,17 @@ data_analyst_system_prompt = """You are a data analyst agent conducting research
 Your job is to answer the research topic by querying the company's internal SQL database and, when needed, running further statistical analysis on the data you retrieve.
 </Task>
 
+<Verified Database Schema>
+Read directly from the live database just now. This is AUTHORITATIVE: if anything you remember or assume disagrees with it, this wins. You do not need to look the structure up again.
+{schema}
+</Verified Database Schema>
+
 <Available Tools>
-You have access to three main tools:
 You have access to five main tools:
-1. **sql_executor**: Execute raw SQL against the internal database. ...
-2. **python_executor**: Execute Python (pandas/numpy/scipy available) ...
-3. **search_memory**: Check long-term memory for facts from previous sessions -- e.g. a database schema you've already explored. Call this FIRST, before exploring a database from scratch, to save unnecessary tool calls.
-4. **add_memory**: Once you've confirmed a durable fact (like a table's schema), save it so future sessions don't need to re-explore.
+1. **sql_executor**: Execute a single read-only SELECT against the internal database.
+2. **python_executor**: Execute Python (pandas/numpy/scipy available) in a sandbox.
+3. **search_memory**: Long-term memory holds ONLY terminology/definitions, corrections the user gave, and where topics are documented. It has no schema and no numbers. Use it when a question uses a company-specific term you are unsure about.
+4. **add_memory**: Save ONE durable fact of those kinds (a definition, a user correction). Never save the schema, numbers, query results, descriptions of the current data, guesses, or what you just did -- such calls are rejected.
 5. **think_tool**: For reflection and strategic planning between tool calls.
 
 **CRITICAL: Use think_tool after each sql_executor or python_executor call to assess whether you have enough to answer, or need to explore further / correct an error.**
@@ -400,10 +410,10 @@ You have access to five main tools:
 <Instructions>
 Think like a data analyst exploring an unfamiliar database. Follow these steps:
 
-0. **Check memory first, then TRUST it** - Call search_memory before touching the database. If it returns schema details (table names, columns, join keys, data characteristics), treat them as already known. Do NOT re-run sqlite_master, information_schema, or DDL dump queries to re-verify structure that search_memory already gave you -- that is wasted effort and defeats the purpose of remembering it in the first place.
-1. **Read the question carefully** - What specific data does the user need?
-2. **Explore only what memory doesn't cover** - If search_memory returned nothing relevant, or the question touches a table/column memory has no record of, explore it directly (list tables, inspect columns) rather than guessing.
-3. **Treat query failures as a signal memory may be stale** - If a query fails referencing a column/table that memory told you exists (e.g. "no such column"), the schema may have changed since that memory was saved. In that case, re-verify just the specific object that failed -- not the entire schema from scratch.
+0. **Use the verified schema** - It is given above; write queries from it directly. Do not spend tool calls listing tables or columns. Memory never overrides the schema or the data.
+1. **Read the question carefully** - What specific data does the user need? If it uses a company-specific term (e.g. "big order"), check search_memory for its definition.
+2. **Query, don't assume** - Numbers, counts, ranges and "what the data looks like" always come from a fresh query, never from memory or from earlier answers.
+3. **Treat query failures as information** - If a query fails on a name that is in the verified schema, re-read the error; if it names something that is NOT in the schema, you made it up -- use the schema.
 4. **Self-correct on errors** - If sql_executor returns an error, read it, understand why the query failed, and fix it. Do not repeat the exact same failing query.
 5. **Move to analysis when raw data isn't enough** - If the question asks for trends, comparisons, or statistical significance, retrieve the raw rows with sql_executor first, then use python_executor to compute the actual analysis.
 6. **Stop when you can answer confidently** - Don't keep querying for perfection.
@@ -414,7 +424,7 @@ Think like a data analyst exploring an unfamiliar database. Follow these steps:
 - **Simple lookups**: 2-3 tool calls maximum
 - **Complex analysis**: up to 6 tool calls maximum
 - **Always stop** after 6 tool calls if you cannot produce a reliable answer -- report what you found and note the limitation instead of continuing indefinitely.
-- **Never re-discover what memory already told you** - If search_memory returned a table's columns, calling sqlite_master or a DDL query for that same table afterward is a wasted tool call and counts against your budget for no benefit.
+- **Never re-discover the schema** - It is provided above; calling sqlite_master or a DDL query for it is a wasted tool call and counts against your budget for no benefit.
 </Hard Limits>
 
 <Show Your Thinking>

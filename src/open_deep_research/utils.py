@@ -5,6 +5,7 @@ import contextlib
 import io
 import logging
 import os
+import threading
 import traceback
 import warnings
 from datetime import datetime, timedelta, timezone
@@ -36,7 +37,14 @@ import pandas as pd
 import sqlalchemy
 from sqlalchemy import text as sql_text
 
+from open_deep_research.code_sandbox import format_for_agent, run_python_sandboxed
 from open_deep_research.configuration import Configuration, SearchAPI
+from open_deep_research.kb_retrieval import search as kb_search
+from open_deep_research.memory_policy import GUIDANCE as MEMORY_GUIDANCE, check_fact
+from open_deep_research.schema_context import get_schema
+from open_deep_research.policy import fatal_denial, is_fatal_denial
+from open_deep_research.query_cache import QueryCache, get_cache, is_introspection
+from open_deep_research.sql_guard import ReadOnlyViolation, run_readonly_query
 from open_deep_research.prompts import summarize_webpage_prompt
 from open_deep_research.state import ResearchComplete, Summary
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -580,12 +588,12 @@ async def get_search_tool(search_api: SearchAPI):
 ##########################
 
 SQL_EXECUTOR_DESCRIPTION = (
-    "Execute a raw SQL query against the company's internal database and return "
-    "the results. You have no pre-built schema documentation -- use this tool to "
-    "explore available tables and columns yourself first (e.g. via "
-    "information_schema or the dialect's equivalent), then write and execute "
-    "your real query. If a query fails, read the error message and correct "
-    "your SQL before retrying."
+    "Execute ONE read-only SELECT (CTEs and UNIONs allowed) against the company's internal "
+    "database and return the rows (max 200). The database is SQLite unless your instructions say "
+    "otherwise: do not use information_schema or ILIKE. The verified schema is given in your "
+    "instructions -- write queries from it directly and do not look the structure up. Only if your "
+    "instructions say the schema is unavailable, discover it with sqlite_master / "
+    "pragma_table_info('<table>'). If a query fails, read the error and correct your SQL."
 )
 
 @tool(description=SQL_EXECUTOR_DESCRIPTION)
@@ -606,20 +614,33 @@ async def sql_executor(query: str, config: RunnableConfig = None) -> str:
         return "Error: internal_db_url is not configured. No internal database is available."
 
     try:
-        engine = sqlalchemy.create_engine(db_url)
-        with engine.connect() as conn:
-            result = conn.execute(sql_text(query))
-            if result.returns_rows:
-                rows = result.fetchmany(200)
-                if not rows:
-                    return "Query executed successfully but returned no rows."
-                columns = list(result.keys())
-                formatted = " | ".join(columns) + "\n"
-                formatted += "\n".join(" | ".join(str(v) for v in row) for row in rows)
-                return formatted
-            return f"Query executed successfully. Rows affected: {result.rowcount}"
+        cache = get_cache(configurable.schema_cache_ttl_s)
+        cache_key = QueryCache.key(db_url, query)
+        cached = cache.get(cache_key) if is_introspection(query) else None
+        if cached is not None:
+            columns, rows, truncated = cached
+        else:
+            columns, rows, truncated = await asyncio.to_thread(run_readonly_query, db_url, query)
+            if is_introspection(query):          # validated read-only SELECT on schema tables only
+                cache.put(cache_key, [columns, [list(r) for r in rows], truncated])
+    except ReadOnlyViolation as e:
+        if e.fatal:
+            return fatal_denial(f"Query rejected by read-only guard: {e}")
+        return (
+            f"Query rejected by read-only guard: {e}. "
+            "Only a single SELECT statement (CTEs and UNIONs allowed) can be executed; "
+            "to inspect the schema use sqlite_master / pragma_table_info('<table>') or information_schema."
+        )
     except Exception as e:
         return f"SQL execution error: {str(e)}"
+
+    if not rows:
+        return "Query executed successfully but returned no rows."
+    lines = [" | ".join(columns)]
+    lines += [" | ".join(str(v) for v in row) for row in rows]
+    if truncated:
+        lines.append(f"... (truncated to the first {len(rows)} rows)")
+    return "\n".join(lines)
 
 
 PYTHON_EXECUTOR_DESCRIPTION = (
@@ -642,33 +663,10 @@ async def python_executor(code: str) -> str:
         Captured stdout plus the repr of `result`, or an error message
         with traceback if execution failed.
     """
-    allowed_globals = {"pd": pd, "__builtins__": __builtins__}
-    try:
-        import numpy as np
-        import scipy
-        allowed_globals["np"] = np
-        allowed_globals["scipy"] = scipy
-    except ImportError:
-        pass
+    result = await run_python_sandboxed(code)
+    return format_for_agent(result)
 
-    local_vars = {}
-    stdout_capture = io.StringIO()
-    try:
-        with contextlib.redirect_stdout(stdout_capture):
-            exec(code, allowed_globals, local_vars)
-        output = stdout_capture.getvalue()
-        result_value = local_vars.get("result")
-        formatted = output
-        if result_value is not None:
-            formatted += f"\nresult = {result_value!r}"
-        return formatted or (
-            "Code executed successfully with no output. "
-            "Did you forget to set `result` or print something?"
-        )
-    except Exception:
-        return f"Python execution error:\n{traceback.format_exc()}"
-    
-    
+
 async def get_all_tools(config: RunnableConfig, researcher_type: str = "general"):
     tools = [tool(ResearchComplete), think_tool]
     if researcher_type == "data_analyst":
@@ -700,28 +698,52 @@ def get_notes_from_tool_calls(messages: list[MessageLikeRepresentation]):
 # Memory Tool Utils (mem0)
 ##########################
 
+_mem0_clients: dict[str, "MemoryClient"] = {}
+_mem0_lock = threading.Lock()
+
+
 def _get_mem0_client(config: RunnableConfig) -> Optional["MemoryClient"]:
-    """Create a Mem0 client from configuration, or None if not configured."""
+    """Mem0 client for the configured key, or None if not configured.
+
+    Blocking: constructing a MemoryClient makes a synchronous HTTP call to validate the key (~1.2 s measured),
+    so it is cached per key, and callers in async code must reach it through ``asyncio.to_thread``."""
     configurable = Configuration.from_runnable_config(config)
-    if not configurable.mem0_api_key:
+    key = configurable.mem0_api_key
+    if not key:
         return None
-    return MemoryClient(api_key=configurable.mem0_api_key)
+    with _mem0_lock:
+        if key not in _mem0_clients:
+            _mem0_clients[key] = MemoryClient(api_key=key)
+        return _mem0_clients[key]
 
 
 SEARCH_MEMORY_DESCRIPTION = (
-    "Search your long-term memory for facts learned in PREVIOUS sessions -- "
-    "e.g. a database schema you've already explored, domain terminology "
-    "mappings, or how the user has phrased similar requests before. Call "
-    "this BEFORE exploring a database from scratch to check whether you "
-    "already know the answer -- it can save you several tool calls."
+    "Search long-term memory for lasting knowledge from PREVIOUS sessions: terminology and definitions "
+    "(e.g. what 'big order' means), corrections the user gave, and where a topic is documented. It does NOT hold "
+    "the database schema or any numbers -- the verified schema is already in your instructions, and data must "
+    "always be queried. Memory never overrides the schema or the data."
 )
+
+
+def _known_identifiers(configurable) -> Optional[set]:
+    """Table/column names of the live database (None if there is no database to check against)."""
+    if not configurable.internal_db_url:
+        return None
+    try:
+        return get_schema(configurable.internal_db_url).identifiers
+    except Exception:
+        return None
+
 
 @tool(description=SEARCH_MEMORY_DESCRIPTION)
 async def search_memory(query: str, config: RunnableConfig = None) -> str:
     """Search long-term memory for facts relevant to the query.
 
+    Entries that the memory policy rejects (data values, schema claims, guesses, one-off events) are ignored
+    even if they were stored before the policy existed, so old bad entries cannot mislead the agent.
+
     Args:
-        query: What you're trying to recall, e.g. "sales table schema".
+        query: What you're trying to recall, e.g. "meaning of big order".
         config: Runtime configuration; used to read mem0_api_key / mem0_user_id.
 
     Returns:
@@ -729,54 +751,54 @@ async def search_memory(query: str, config: RunnableConfig = None) -> str:
         memory isn't configured.
     """
     configurable = Configuration.from_runnable_config(config)
-    client = _get_mem0_client(config)
+    client = await asyncio.to_thread(_get_mem0_client, config)
     if client is None:
         return "Memory is not configured (mem0_api_key missing) -- proceed without it."
     try:
-        raw = client.search(query, filters={"user_id": configurable.mem0_user_id})
-        memories = raw.get("results", []) if isinstance(raw, dict) else raw
+        raw = await asyncio.to_thread(client.search, query, filters={"user_id": configurable.mem0_user_id})
+        memories = raw.get("results", raw) if isinstance(raw, dict) else raw
         memories = [m for m in memories if m.get("score", 0) >= 0.2]
-        if not memories:
+        known = await asyncio.to_thread(_known_identifiers, configurable)
+        usable = [m for m in memories if check_fact(m["memory"], known).ok]
+        if not usable:
             return "No relevant memories found for this query."
-        return "\n".join(f"- {m['memory']}" for m in memories)
+        return "\n".join(f"- {m['memory']}" for m in usable)
     except Exception as e:
         return f"Memory search error: {str(e)}"
 
 
 ADD_MEMORY_DESCRIPTION = (
-    "Save a DURABLE fact to long-term memory for future sessions -- e.g. a "
-    "database's schema once you've explored it, a domain terminology mapping "
-    "you've figured out, or a correction the user gave you. Do NOT save "
-    "one-off results (like today's specific query answer) -- only save facts "
-    "that will still be true and useful the next time you're asked a related "
-    "question."
+    "Save ONE durable fact for future sessions. Allowed: a terminology/definition mapping, a correction the user "
+    "gave you, or where a topic is documented. NOT allowed (the call is rejected): the database schema (it is "
+    "provided verified), any number or query result, descriptions of what the data currently looks like, guesses, "
+    "or a record of what you just did."
 )
 
 @tool(description=ADD_MEMORY_DESCRIPTION)
 async def add_memory(fact: str, config: RunnableConfig = None) -> str:
-    """Persist a durable fact to long-term memory.
+    """Persist a durable fact to long-term memory, if the memory policy allows it.
 
     Args:
-        fact: The fact to remember, written so it stands alone without
-            today's conversation context (e.g. "The internal database is
-            SQLite with two tables: products (product_line PK, category,
-            launch_year) and sales (id, date, product_line, region, revenue,
-            units)").
+        fact: One self-contained fact, e.g. "A 'big order' means a sale with units greater than 100".
         config: Runtime configuration; used to read mem0_api_key / mem0_user_id.
 
     Returns:
-        Confirmation the fact was saved, or an error message.
+        Confirmation the fact was saved, or the reason it was refused.
     """
     configurable = Configuration.from_runnable_config(config)
-    client = _get_mem0_client(config)
+    client = await asyncio.to_thread(_get_mem0_client, config)
     if client is None:
         return "Memory is not configured (mem0_api_key missing) -- fact not saved."
+    verdict = check_fact(fact, await asyncio.to_thread(_known_identifiers, configurable))
+    if not verdict.ok:
+        return f"Memory not saved: {verdict.message}. {MEMORY_GUIDANCE}"
     try:
-        client.add(
+        await asyncio.to_thread(
+            client.add,
             [{"role": "assistant", "content": fact}],
             user_id=configurable.mem0_user_id,
         )
-        return "Fact saved to long-term memory."
+        return f"Fact saved to long-term memory ({verdict.category})."
     except Exception as e:
         return f"Memory save error: {str(e)}"
 
@@ -786,10 +808,16 @@ async def add_memory(fact: str, config: RunnableConfig = None) -> str:
 
 _kb_embeddings = None  
 
+_kb_embeddings_lock = threading.Lock()
+
+
 def _get_kb_vectorstore(config: RunnableConfig):
+    """Blocking: the first call loads the embedding model (~13 s measured, imports torch).
+    Call it via ``asyncio.to_thread`` - on the event loop it stalls every other request and Redis call."""
     global _kb_embeddings
-    if _kb_embeddings is None:
-        _kb_embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-small-zh-v1.5")
+    with _kb_embeddings_lock:
+        if _kb_embeddings is None:
+            _kb_embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-small-zh-v1.5")
 
     configurable = Configuration.from_runnable_config(config)
     return PGVector(
@@ -809,19 +837,18 @@ SEARCH_KB_DESCRIPTION = (
 
 @tool(description=SEARCH_KB_DESCRIPTION)
 async def search_knowledge_base(query: str, config: RunnableConfig = None) -> str:
-    """Semantic search over the internal document knowledge base."""
+    """Hybrid (dense + BM25) search over the internal document knowledge base."""
     try:
-        vectorstore = _get_kb_vectorstore(config)
-        # 异步检索最相关的 3 个 chunk
-        results = await vectorstore.asimilarity_search(query, k=3)
-        if not results:
+        configurable = Configuration.from_runnable_config(config)
+        vectorstore = await asyncio.to_thread(_get_kb_vectorstore, config)
+        hits = await kb_search(
+            vectorstore, configurable.postgres_connection_string, query,
+            k=configurable.kb_top_k, mode=configurable.kb_retrieval_mode,
+            candidates=configurable.kb_candidates, rerank=configurable.kb_rerank,
+        )
+        if not hits:
             return "No relevant documents found in the knowledge base."
-
-        formatted = []
-        for doc in results:
-            source = doc.metadata.get("source", "unknown")
-            formatted.append(f"[来源: {source}]\n{doc.page_content}")
-        return "\n\n".join(formatted)
+        return "\n\n".join(f"[来源: {h.source}]\n{h.text}" for h in hits)
     except Exception as e:
         return f"Knowledge base search error: {str(e)}"
 
