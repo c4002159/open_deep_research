@@ -28,6 +28,7 @@ from open_deep_research.kb_retrieval import load_corpus
 from open_deep_research.approval import approval_reason, audit, decide
 from open_deep_research.request_triage import classify_request, refusal_message
 from open_deep_research.policy import fatal_denial, is_fatal_denial
+from open_deep_research.schema_context import schema_prompt_block
 from open_deep_research.resilience import ResiliencePolicy, call_with_resilience
 from open_deep_research.utils import (
     anthropic_websearch_called,
@@ -447,7 +448,10 @@ async def researcher(state: ResearcherState, config: RunnableConfig) -> Command[
     
     # Prepare system prompt based on researcher type
     if researcher_type == "data_analyst":
-       researcher_prompt = data_analyst_system_prompt.format(date=get_today_str())
+       researcher_prompt = data_analyst_system_prompt.format(
+           date=get_today_str(),
+           schema=await schema_prompt_block(configurable.internal_db_url),
+       )
     elif researcher_type == "knowledge_base":
        researcher_prompt = knowledge_base_system_prompt.format(date=get_today_str())
     else:

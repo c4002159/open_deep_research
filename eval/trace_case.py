@@ -43,7 +43,7 @@ async def main(case_id: str):
     load_dotenv()
     case = next(c for c in ALL_CASES if c["id"] == case_id)
     config = {"callbacks": [Printer()], "configurable": {"thread_id": f"trace-{case_id}", "allow_clarification": False,
-                                                          "approval_mode": "auto_approve"}}
+                                                          "approval_mode": "auto_approve", "mem0_user_id": "trace-" + str(int(time.time()))}}
     out = await _real_invoke(case, config)
     print("\nFINAL ANSWER:\n", out[:600])
 

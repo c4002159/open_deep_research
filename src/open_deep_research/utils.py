@@ -39,6 +39,8 @@ from sqlalchemy import text as sql_text
 from open_deep_research.code_sandbox import format_for_agent, run_python_sandboxed
 from open_deep_research.configuration import Configuration, SearchAPI
 from open_deep_research.kb_retrieval import search as kb_search
+from open_deep_research.memory_policy import GUIDANCE as MEMORY_GUIDANCE, check_fact
+from open_deep_research.schema_context import get_schema
 from open_deep_research.policy import fatal_denial, is_fatal_denial
 from open_deep_research.query_cache import QueryCache, get_cache, is_introspection
 from open_deep_research.sql_guard import ReadOnlyViolation, run_readonly_query
@@ -585,12 +587,12 @@ async def get_search_tool(search_api: SearchAPI):
 ##########################
 
 SQL_EXECUTOR_DESCRIPTION = (
-    "Execute a raw SQL query against the company's internal database and return "
-    "the results. You have no pre-built schema documentation -- use this tool to "
-    "explore available tables and columns yourself first (e.g. via "
-    "information_schema or the dialect's equivalent), then write and execute "
-    "your real query. If a query fails, read the error message and correct "
-    "your SQL before retrying."
+    "Execute ONE read-only SELECT (CTEs and UNIONs allowed) against the company's internal "
+    "database and return the rows (max 200). The database is SQLite unless your instructions say "
+    "otherwise: do not use information_schema or ILIKE. The verified schema is given in your "
+    "instructions -- write queries from it directly and do not look the structure up. Only if your "
+    "instructions say the schema is unavailable, discover it with sqlite_master / "
+    "pragma_table_info('<table>'). If a query fails, read the error and correct your SQL."
 )
 
 @tool(description=SQL_EXECUTOR_DESCRIPTION)
@@ -704,19 +706,32 @@ def _get_mem0_client(config: RunnableConfig) -> Optional["MemoryClient"]:
 
 
 SEARCH_MEMORY_DESCRIPTION = (
-    "Search your long-term memory for facts learned in PREVIOUS sessions -- "
-    "e.g. a database schema you've already explored, domain terminology "
-    "mappings, or how the user has phrased similar requests before. Call "
-    "this BEFORE exploring a database from scratch to check whether you "
-    "already know the answer -- it can save you several tool calls."
+    "Search long-term memory for lasting knowledge from PREVIOUS sessions: terminology and definitions "
+    "(e.g. what 'big order' means), corrections the user gave, and where a topic is documented. It does NOT hold "
+    "the database schema or any numbers -- the verified schema is already in your instructions, and data must "
+    "always be queried. Memory never overrides the schema or the data."
 )
+
+
+def _known_identifiers(configurable) -> Optional[set]:
+    """Table/column names of the live database (None if there is no database to check against)."""
+    if not configurable.internal_db_url:
+        return None
+    try:
+        return get_schema(configurable.internal_db_url).identifiers
+    except Exception:
+        return None
+
 
 @tool(description=SEARCH_MEMORY_DESCRIPTION)
 async def search_memory(query: str, config: RunnableConfig = None) -> str:
     """Search long-term memory for facts relevant to the query.
 
+    Entries that the memory policy rejects (data values, schema claims, guesses, one-off events) are ignored
+    even if they were stored before the policy existed, so old bad entries cannot mislead the agent.
+
     Args:
-        query: What you're trying to recall, e.g. "sales table schema".
+        query: What you're trying to recall, e.g. "meaning of big order".
         config: Runtime configuration; used to read mem0_api_key / mem0_user_id.
 
     Returns:
@@ -729,49 +744,48 @@ async def search_memory(query: str, config: RunnableConfig = None) -> str:
         return "Memory is not configured (mem0_api_key missing) -- proceed without it."
     try:
         raw = client.search(query, filters={"user_id": configurable.mem0_user_id})
-        memories = raw.get("results", []) if isinstance(raw, dict) else raw
+        memories = raw.get("results", raw) if isinstance(raw, dict) else raw
         memories = [m for m in memories if m.get("score", 0) >= 0.2]
-        if not memories:
+        known = _known_identifiers(configurable)
+        usable = [m for m in memories if check_fact(m["memory"], known).ok]
+        if not usable:
             return "No relevant memories found for this query."
-        return "\n".join(f"- {m['memory']}" for m in memories)
+        return "\n".join(f"- {m['memory']}" for m in usable)
     except Exception as e:
         return f"Memory search error: {str(e)}"
 
 
 ADD_MEMORY_DESCRIPTION = (
-    "Save a DURABLE fact to long-term memory for future sessions -- e.g. a "
-    "database's schema once you've explored it, a domain terminology mapping "
-    "you've figured out, or a correction the user gave you. Do NOT save "
-    "one-off results (like today's specific query answer) -- only save facts "
-    "that will still be true and useful the next time you're asked a related "
-    "question."
+    "Save ONE durable fact for future sessions. Allowed: a terminology/definition mapping, a correction the user "
+    "gave you, or where a topic is documented. NOT allowed (the call is rejected): the database schema (it is "
+    "provided verified), any number or query result, descriptions of what the data currently looks like, guesses, "
+    "or a record of what you just did."
 )
 
 @tool(description=ADD_MEMORY_DESCRIPTION)
 async def add_memory(fact: str, config: RunnableConfig = None) -> str:
-    """Persist a durable fact to long-term memory.
+    """Persist a durable fact to long-term memory, if the memory policy allows it.
 
     Args:
-        fact: The fact to remember, written so it stands alone without
-            today's conversation context (e.g. "The internal database is
-            SQLite with two tables: products (product_line PK, category,
-            launch_year) and sales (id, date, product_line, region, revenue,
-            units)").
+        fact: One self-contained fact, e.g. "A 'big order' means a sale with units greater than 100".
         config: Runtime configuration; used to read mem0_api_key / mem0_user_id.
 
     Returns:
-        Confirmation the fact was saved, or an error message.
+        Confirmation the fact was saved, or the reason it was refused.
     """
     configurable = Configuration.from_runnable_config(config)
     client = _get_mem0_client(config)
     if client is None:
         return "Memory is not configured (mem0_api_key missing) -- fact not saved."
+    verdict = check_fact(fact, _known_identifiers(configurable))
+    if not verdict.ok:
+        return f"Memory not saved: {verdict.message}. {MEMORY_GUIDANCE}"
     try:
         client.add(
             [{"role": "assistant", "content": fact}],
             user_id=configurable.mem0_user_id,
         )
-        return "Fact saved to long-term memory."
+        return f"Fact saved to long-term memory ({verdict.category})."
     except Exception as e:
         return f"Memory save error: {str(e)}"
 
