@@ -67,3 +67,6 @@ tmp/
 temp/
 
 .langgraph_api
+
+# evaluation run outputs (promote a run to eval/baselines/ to keep it)
+eval/results/

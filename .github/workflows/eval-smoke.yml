@@ -1,0 +1,21 @@
+name: eval-smoke
+
+# Offline checks only: security regression suite + evaluation-framework tests.
+# No LLM keys or database needed. The agent-level evaluation (eval/run_agent_eval.py)
+# costs tokens, so it is run manually and compared with eval/compare.py.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --frozen
+      - name: Security guards (SQL read-only + code sandbox, subprocess backend)
+        run: uv run pytest tests/test_security_guards.py -q
+      - name: Evaluation framework
+        run: uv run pytest tests/test_eval_framework.py -q
