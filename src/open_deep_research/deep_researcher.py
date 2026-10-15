@@ -58,6 +58,9 @@ from open_deep_research.prompts import (
     clarify_with_user_instructions,
     compress_research_simple_human_message,
     compress_research_system_prompt,
+    ACTIONS_ANALYST_BLOCK,
+    ACTIONS_REPORT_NOTE,
+    ACTIONS_SUPERVISOR_NOTE,
     data_analyst_system_prompt,
     final_report_generation_prompt,
     knowledge_base_system_prompt,
@@ -99,7 +102,7 @@ async def triage_request(state: AgentState, config: RunnableConfig) -> Command[L
         "event": "request_refused_by_triage", "reason": reason, "request": text[:300],
         "thread_id": str(config.get("configurable", {}).get("thread_id", "")),
     })
-    return Command(goto=END, update={"messages": [AIMessage(content=refusal_message(reason, text))]})
+    return Command(goto=END, update={"messages": [AIMessage(content=refusal_message(reason, text, actions_enabled=configurable.enable_actions))]})
 
 
 async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Command[Literal["write_research_brief", "__end__"]]:
@@ -204,6 +207,8 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
         max_concurrent_research_units=configurable.max_concurrent_research_units,
         max_researcher_iterations=configurable.max_researcher_iterations
     )
+    if configurable.enable_actions:
+        supervisor_system_prompt += ACTIONS_SUPERVISOR_NOTE
     
     return Command(
         goto="research_supervisor", 
@@ -452,6 +457,8 @@ async def researcher(state: ResearcherState, config: RunnableConfig) -> Command[
            date=get_today_str(),
            schema=await schema_prompt_block(configurable.internal_db_url),
        )
+       if configurable.enable_actions:
+           researcher_prompt += ACTIONS_ANALYST_BLOCK
     elif researcher_type == "knowledge_base":
        researcher_prompt = knowledge_base_system_prompt.format(date=get_today_str())
     else:
@@ -763,6 +770,8 @@ async def final_report_generation(state: AgentState, config: RunnableConfig):
                 findings=findings,
                 date=get_today_str()
             )
+            if configurable.enable_actions:
+                final_report_prompt += ACTIONS_REPORT_NOTE
             
             # Generate the final report
             final_report = await configurable_model.with_config(writer_model_config).ainvoke([

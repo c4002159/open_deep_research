@@ -671,6 +671,10 @@ async def get_all_tools(config: RunnableConfig, researcher_type: str = "general"
     tools = [tool(ResearchComplete), think_tool]
     if researcher_type == "data_analyst":
         tools.extend([sql_executor, python_executor])
+        if Configuration.from_runnable_config(config).enable_actions:
+            from open_deep_research.actions import ACTION_TOOLS
+
+            tools.extend(ACTION_TOOLS)
     elif researcher_type == "knowledge_base":
         tools.extend([search_knowledge_base])
     else:

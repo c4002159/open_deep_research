@@ -101,6 +101,7 @@ class TaskRunner:
             "allow_clarification": False,
             "approval_mode": "interrupt",       # fixed server-side: callers cannot waive the approval gate
             "mem0_user_id": owner,              # long-term memory is per authenticated user
+            "requested_by": owner,              # refund proposals are attributed to the token's user, never to model output
         }}
 
     async def run(self, task_id: str) -> None:
