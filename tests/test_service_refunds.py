@@ -293,3 +293,43 @@ def test_pending_data_approvals_are_listed_for_approvers_only():
             assert (await c.get("/v1/approvals", headers=C)).json()["tasks"] == []        # decided: gone
 
     asyncio.run(go())
+
+
+# ------------------------------------------------------------------ live events (what the UI shows while a task runs)
+def test_tracker_collects_live_events_and_only_previews_action_tools():
+    from uuid import uuid4
+
+    from open_deep_research.telemetry import UsageTracker
+
+    tr = UsageTracker()
+    for name, out in (("sql_executor", "id | revenue\n80 | 39700.37"), ("propose_refund", "Refund proposal #1 created")):
+        rid = uuid4()
+        tr.on_tool_start({"name": name}, "SELECT * FROM sales WHERE id = 80 LIMIT 1", run_id=rid)
+        tr.on_tool_end(out, run_id=rid)
+    evs = list(tr.live_events)
+    assert [(e["type"], e["name"]) for e in evs] == [("tool_start", "sql_executor"), ("tool_end", "sql_executor"),
+                                                     ("tool_start", "propose_refund"), ("tool_end", "propose_refund")]
+    assert "preview" not in evs[1], "query results are business data: never streamed"
+    assert evs[3]["preview"].startswith("Refund proposal #1")
+
+
+def test_runner_publishes_live_events_in_order_and_survives_a_failing_store():
+    from open_deep_research.service.runner import TaskRunner
+    from open_deep_research.telemetry import UsageTracker
+
+    class Store:
+        def __init__(self, fail=False):
+            self.events, self.fail = [], fail
+
+        async def add_event(self, task_id, type_, data):
+            if self.fail:
+                raise ConnectionError("redis down")
+            self.events.append((task_id, type_, data))
+
+    tr = UsageTracker()
+    tr.live_events.extend([{"type": "tool_start", "name": "a", "args": "x"}, {"type": "usage", "tokens_in": 5, "tokens_out": 1, "llm_calls": 1}])
+    ok = Store()
+    asyncio.run(TaskRunner(ok, None, Settings())._drain("t1", tr))
+    assert [e[1] for e in ok.events] == ["tool_start", "usage"] and ok.events[1][2]["tokens_in"] == 5
+    tr.live_events.append({"type": "usage", "tokens_in": 1, "tokens_out": 1, "llm_calls": 1})
+    asyncio.run(TaskRunner(Store(fail=True), None, Settings())._drain("t1", tr))      # must not raise

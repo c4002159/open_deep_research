@@ -10,17 +10,33 @@ from __future__ import annotations
 
 import json
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any, Optional
 
 from langchain_core.callbacks import BaseCallbackHandler
+
+# Tools whose result text is safe to show the person who asked (no business data in it).
+LIVE_PREVIEW_TOOLS = frozenset({"propose_refund", "withdraw_refund"})
 
 TOOL_ERROR_PREFIXES = (
     "SQL execution error", "Query rejected", "Python execution error", "Python execution blocked",
     "Error:", "Error executing tool", "[TOOL_UNAVAILABLE]", "Memory search error", "Memory save error",
     "Knowledge base search error",
 )
+
+
+def _args_for_display(name: str, input_str, inputs) -> str:
+    """A short, readable form of a tool's arguments for the live view. The agent's own reasoning is not shown."""
+    if name == "think_tool":
+        return ""
+    if isinstance(inputs, dict):
+        if isinstance(inputs.get("query"), str):
+            return inputs["query"][:300]
+        if isinstance(inputs.get("code"), str):
+            return inputs["code"][:300]
+        return ", ".join(f"{k}={str(v)[:60]}" for k, v in inputs.items())[:300]
+    return str(input_str)[:200]
 
 
 def _usage_of(response) -> tuple[int, int, str]:
@@ -55,6 +71,8 @@ class UsageTracker(BaseCallbackHandler):
         self.node_seconds: dict[str, float] = defaultdict(float)
         self._starts: dict[Any, tuple[str, str, float]] = {}
         self._t0 = time.perf_counter()
+        # what a UI can show while the task runs; drained by the service (deque pops are thread-safe)
+        self.live_events: deque = deque(maxlen=500)
         self._trace = Path(trace_path) if trace_path else None
         if self._trace:
             self._trace.parent.mkdir(parents=True, exist_ok=True)
@@ -74,6 +92,7 @@ class UsageTracker(BaseCallbackHandler):
     def on_tool_start(self, serialized, input_str, *, run_id, **kwargs):
         name = (serialized or {}).get("name") or kwargs.get("name") or "unknown"
         self._starts[run_id] = ("tool", name, time.perf_counter())
+        self.live_events.append({"type": "tool_start", "name": name, "args": _args_for_display(name, input_str, kwargs.get("inputs"))})
 
     def on_tool_end(self, output, *, run_id, **kwargs):
         _, name, t0 = self._starts.pop(run_id, ("tool", "unknown", time.perf_counter()))
@@ -83,12 +102,17 @@ class UsageTracker(BaseCallbackHandler):
         secs = round(time.perf_counter() - t0, 3)
         self.tool_calls.append({"tool": name, "ok": ok, "seconds": secs})
         self._emit(type="tool", name=name, ok=ok, seconds=secs, preview=text[:120])
+        live = {"type": "tool_end", "name": name, "ok": ok, "seconds": secs}
+        if name in LIVE_PREVIEW_TOOLS:
+            live["preview"] = text[:300]
+        self.live_events.append(live)
 
     def on_tool_error(self, error, *, run_id, **kwargs):
         _, name, t0 = self._starts.pop(run_id, ("tool", "unknown", time.perf_counter()))
         secs = round(time.perf_counter() - t0, 3)
         self.tool_calls.append({"tool": name, "ok": False, "seconds": secs})
         self._emit(type="tool", name=name, ok=False, seconds=secs, error=f"{type(error).__name__}: {str(error)[:120]}")
+        self.live_events.append({"type": "tool_end", "name": name, "ok": False, "seconds": secs})
 
     # ---- llm
     def on_chat_model_start(self, serialized, messages, *, run_id=None, **kwargs):
@@ -109,6 +133,8 @@ class UsageTracker(BaseCallbackHandler):
         m["calls"] += 1; m["tokens_in"] += tin; m["tokens_out"] += tout
         _, _, t0 = self._starts.pop(run_id, ("llm", "llm", time.perf_counter()))
         self._emit(type="llm", model=model, tokens_in=tin, tokens_out=tout, seconds=round(time.perf_counter() - t0, 3))
+        self.live_events.append({"type": "usage", "tokens_in": self.tokens_in, "tokens_out": self.tokens_out,
+                                 "llm_calls": self.llm_calls})
 
     def on_llm_error(self, error, *, run_id=None, **kwargs):
         self._starts.pop(run_id, None)

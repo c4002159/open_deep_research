@@ -44,8 +44,9 @@ PROPOSE_REFUND_DESCRIPTION = (
     "Create a refund PROPOSAL for one order. It does NOT refund anything: human approvers (manager, finance or "
     "director, depending on the amount) must sign it afterwards. The system checks the order, the amount, the 30-day "
     "window and duplicates and may refuse; a refusal is final, do not alter the facts to get around it. "
-    "Look the order up with sql_executor first; never guess an order id or amount. Set service_outage_over_72h only "
-    "if the user said the service was down for more than 72 hours."
+    "Look the order up with sql_executor first; never guess an order id or amount. Set service_outage_over_72h=true "
+    "whenever the user states or reports (even second-hand) that the service was down for more than 72 hours: "
+    "approvers verify that claim. Never set it otherwise."
 )
 
 
@@ -58,7 +59,7 @@ async def propose_refund(order_id: int, amount: float, reason: str, service_outa
         order_id: Id of the order in the sales table (verified against the database).
         amount: Amount to refund; at most the order's revenue.
         reason: Why the customer is being refunded, in the user's words (max 300 characters).
-        service_outage_over_72h: True only if the user stated an outage of more than 72 hours.
+        service_outage_over_72h: True whenever the user states or reports an outage of more than 72 hours (approvers verify it).
         config: Runtime configuration (injected).
     """
     configurable = Configuration.from_runnable_config(config)

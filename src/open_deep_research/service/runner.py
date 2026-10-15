@@ -21,6 +21,7 @@ from open_deep_research.service.settings import Settings
 from open_deep_research.service.store import TaskStore
 
 logger = logging.getLogger(__name__)
+PREWARM_WAIT_S = 30.0
 
 
 class GraphProvider:
@@ -30,6 +31,7 @@ class GraphProvider:
         self.settings = settings
         self.graph: Any = None
         self._cm = None
+        self._prewarm_task: Any = None
 
     async def start(self) -> None:
         import os
@@ -43,7 +45,15 @@ class GraphProvider:
         self._cm = AsyncSqliteSaver.from_conn_string(self.settings.checkpoint_path)
         saver = await self._cm.__aenter__()
         self.graph = deep_researcher_builder.compile(checkpointer=saver)
-        await asyncio.to_thread(self._prewarm)
+        # Warm-up is an optimisation, never a precondition: if the knowledge-base database is unreachable the
+        # connection attempt can hang for a long time, and the service must still come up (the tools report it).
+        if os.environ.get("ODR_SKIP_PREWARM") == "1":      # dev/tests: start instantly, pay for the first request instead
+            return
+        self._prewarm_task = asyncio.ensure_future(asyncio.to_thread(self._prewarm))
+        try:
+            await asyncio.wait_for(asyncio.shield(self._prewarm_task), PREWARM_WAIT_S)
+        except asyncio.TimeoutError:
+            logger.warning("warm-up still running after %.0f s; serving without waiting for it", PREWARM_WAIT_S)
 
     @staticmethod
     def _prewarm() -> None:
@@ -129,7 +139,14 @@ class TaskRunner:
                 else:
                     graph_input = {"messages": [{"role": "user", "content": task["question"]}]}
 
-            outcome = await self._run_with_cancel(task_id, graph, graph_input, cfg)
+            pump = asyncio.create_task(self._pump(task_id, tracker))
+            try:
+                outcome = await self._run_with_cancel(task_id, graph, graph_input, cfg)
+            finally:
+                pump.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await pump
+                await asyncio.shield(self._drain(task_id, tracker))      # events from the last moments of the run
             if outcome is not None:
                 await self._finish(task_id, outcome)
         except asyncio.TimeoutError:
@@ -146,6 +163,20 @@ class TaskRunner:
             await asyncio.shield(self._record_usage(task_id, owner, tracker))
         # asyncio.CancelledError (the worker itself being killed) is deliberately NOT caught:
         # the task must stay RUNNING so the lease expires and another worker takes it over.
+
+    async def _drain(self, task_id: str, tracker: UsageTracker) -> None:
+        """Move tool/usage events the callback collected into the task's event stream (best effort)."""
+        try:
+            while tracker.live_events:
+                ev = tracker.live_events.popleft()
+                await self.store.add_event(task_id, ev.pop("type"), ev)
+        except Exception:                                         # noqa: BLE001 - progress display must never fail a task
+            logger.warning("could not publish live events for %s", task_id, exc_info=True)
+
+    async def _pump(self, task_id: str, tracker: UsageTracker, interval: float = 0.25) -> None:
+        while True:
+            await asyncio.sleep(interval)
+            await self._drain(task_id, tracker)
 
     async def _record_usage(self, task_id: str, owner: str, tracker: UsageTracker) -> None:
         try:

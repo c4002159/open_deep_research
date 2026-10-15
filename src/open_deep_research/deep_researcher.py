@@ -59,6 +59,7 @@ from open_deep_research.prompts import (
     compress_research_simple_human_message,
     compress_research_system_prompt,
     ACTIONS_ANALYST_BLOCK,
+    ACTIONS_BRIEF_NOTE,
     ACTIONS_REPORT_NOTE,
     ACTIONS_SUPERVISOR_NOTE,
     data_analyst_system_prompt,
@@ -199,6 +200,8 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
         messages=get_buffer_string(state.get("messages", [])),
         date=get_today_str()
     )
+    if configurable.enable_actions:
+        prompt_content += ACTIONS_BRIEF_NOTE
     response = await research_model.ainvoke([HumanMessage(content=prompt_content)])
     
     # Step 3: Initialize supervisor with research brief and instructions

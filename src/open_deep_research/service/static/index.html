@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>企业数据分析 Agent</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%232f5fd0'/%3E%3Cpath d='M3 11l3-4 3 2 4-5' stroke='white' stroke-width='1.6' fill='none'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <button class="btn side-toggle" id="sideToggle" aria-label="历史任务">☰</button>
+    <div class="brand">企业数据分析 Agent<small>自然语言查询与操作</small></div>
+    <nav class="tabs" role="tablist" aria-label="页面">
+      <button role="tab" id="tab-chat" aria-selected="true" data-tab="chat">对话</button>
+      <button role="tab" id="tab-inbox" aria-selected="false" data-tab="inbox">待处理<span class="badge" id="inboxBadge" hidden>0</span></button>
+      <button role="tab" id="tab-audit" aria-selected="false" data-tab="audit">审计</button>
+    </nav>
+    <div class="spacer"></div>
+    <div class="meter" id="meter">
+      <button id="meterBtn" aria-expanded="false" aria-controls="meterPop" title="今日 token 用量，点击看近 7 天">
+        <span class="label"><span id="meterText">–</span><span id="meterCost"></span></span>
+        <span class="bar" id="meterBar"><i></i></span>
+      </button>
+      <div class="pop" id="meterPop" hidden></div>
+    </div>
+    <div class="persona" id="persona"></div>
+    <div class="menu">
+      <button id="adminBtn" aria-expanded="false" aria-controls="adminPop">管理</button>
+      <div class="pop" id="adminPop" hidden>
+        <a href="/dashboard" target="_blank" rel="noopener">用量看板（管理员）</a>
+        <a href="/docs" target="_blank" rel="noopener">API 文档</a>
+        <a href="/metrics" target="_blank" rel="noopener">Prometheus 指标</a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <aside class="side" id="side" aria-label="历史任务">
+      <h3>历史任务</h3>
+      <ul class="hist" id="hist"></ul>
+    </aside>
+
+    <section class="view" id="view-chat" aria-live="polite">
+      <div class="wrap">
+        <div class="hero" id="hero">
+          <h1>用一句话查数据、做分析、办退款</h1>
+          <p>查询只读；写操作只能"提申请"，由有权限的人审批后才生效。</p>
+          <div class="persona-note" id="personaNote"></div>
+        </div>
+        <div class="chips" id="chips"></div>
+        <div id="turns"></div>
+        <div class="composer">
+          <div id="banners"></div>
+          <form id="composer">
+            <textarea id="input" rows="1" placeholder="例如：请给订单 80 办理全额退款，客户反馈产品完全不能用。" aria-label="输入你的请求" maxlength="4000"></textarea>
+            <button class="primary" id="send" type="submit">发送</button>
+          </form>
+          <div class="hint">Enter 发送，Shift+Enter 换行。每次发送带幂等键，重复提交会被合并。</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" id="view-inbox" hidden>
+      <div class="wrap"><div id="inbox"></div></div>
+    </section>
+
+    <section class="view" id="view-audit" hidden>
+      <div class="wrap"><div id="audit"></div></div>
+    </section>
+  </main>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

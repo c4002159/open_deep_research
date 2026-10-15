@@ -12,6 +12,7 @@
     POST /v1/refunds/{id}/decision  sign / reject a refund proposal (role from the token; never your own)
     POST /v1/refunds/{id}/reverse   reverse an applied refund within 24h (finance / director)
     GET  /v1/audit                  refund events + data-access decisions (approvers, admins)
+    GET  /                          the web client (static/index.html)
     GET  /healthz, /metrics
 """
 
@@ -23,12 +24,14 @@ import json
 import logging
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Optional
 
 import redis.asyncio as aioredis
 from redis.exceptions import RedisError
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from open_deep_research import refunds as RF
@@ -43,6 +46,7 @@ from open_deep_research.service.worker import WorkerPool
 from open_deep_research.telemetry import estimate_cost
 
 logger = logging.getLogger(__name__)
+STATIC_DIR = Path(__file__).parent / "static"
 PUBLIC_FIELDS = ("id", "state", "question", "created_at", "updated_at", "result", "error", "awaiting", "attempts")
 
 
@@ -452,6 +456,13 @@ def create_app(settings: Optional[Settings] = None, provider: Any = None, start_
         async def demo_users():
             """Demo only: lists the sample accounts and their tokens so the UI can switch persona. Never enable in production."""
             return {"users": [{"user": u, "role": role_of(u), "key": k} for k, u in settings.api_keys.items()]}
+
+    # the web client: three static files, no build step
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+    @app.get("/", include_in_schema=False)
+    async def index():
+        return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
     @app.get("/dashboard", response_class=HTMLResponse)
     async def dashboard():
