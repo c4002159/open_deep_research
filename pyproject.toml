@@ -78,6 +78,7 @@ packages = ["open_deep_research", "open_deep_research.service", "legacy", "tests
 
 [tool.setuptools.package-data]
 "*" = ["py.typed"]
+"open_deep_research.service" = ["static/*"]
 
 [tool.ruff]
 lint.select = [

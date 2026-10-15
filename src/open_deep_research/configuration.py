@@ -331,6 +331,21 @@ class Configuration(BaseModel):
         default="logs/approvals.jsonl",
         metadata={"x_oap_ui_config": {"type": "text", "description": "Append-only JSONL audit log of approval decisions."}},
     )
+    enable_actions: bool = Field(
+        default=False,
+        metadata={"x_oap_ui_config": {"type": "boolean", "default": False,
+                                      "description": "Let the data_analyst start business actions (refund proposals). The agent can only propose; humans approve through the service."}},
+    )
+    business_db_url: Optional[str] = Field(
+        default=None,
+        metadata={"x_oap_ui_config": {"type": "text",
+                                      "description": "SQLite URL the refund workflow writes to; defaults to internal_db_url. Agent SQL stays read-only either way."}},
+    )
+    business_date: Optional[str] = Field(
+        default=None,
+        metadata={"x_oap_ui_config": {"type": "text",
+                                      "description": "ISO date treated as 'today' by the 30-day refund window (demo data is from 2026); defaults to the real date."}},
+    )
 
     mem0_api_key: Optional[str] = Field(
         default=None,

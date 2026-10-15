@@ -5,6 +5,16 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
+def _parse_roles(raw: str) -> dict[str, str]:
+    """ODR_ROLES="bob=manager,carol=finance" -> {"bob": "manager", "carol": "finance"}"""
+    out = {}
+    for pair in filter(None, (p.strip() for p in raw.split(","))):
+        user, _, role = pair.partition("=")
+        if user and role:
+            out[user.strip()] = role.strip()
+    return out
+
+
 def _parse_keys(raw: str) -> dict[str, str]:
     """ODR_API_KEYS="key1:alice,key2:bob" -> {"key1": "alice", "key2": "bob"}"""
     out = {}
@@ -46,6 +56,12 @@ class Settings:
     approvers: frozenset = frozenset()  # users who may approve/reject confidential-data requests
     owner_can_approve: bool = False     # approving your own request defeats the control; dev/demo only
 
+    # business workflow (refunds)
+    roles: dict[str, str] = field(default_factory=dict)   # user -> manager | finance | director
+    business_db_url: str = ""                             # sqlite:///... ; empty disables the refund endpoints
+    approval_log_path: str = "logs/approvals.jsonl"
+    demo_mode: bool = False                               # exposes /demo/users (tokens!) - never in production
+
     checkpoint_path: str = "data/checkpoints.sqlite"
 
     # cost control & observability
@@ -70,6 +86,11 @@ class Settings:
             jwt_secret=e("ODR_JWT_SECRET", ""),
             approvers=frozenset(filter(None, e("ODR_APPROVERS", "").split(","))),
             owner_can_approve=e("ODR_OWNER_CAN_APPROVE", "0") == "1",
+            roles=_parse_roles(e("ODR_ROLES", "")),
+            business_db_url=e("ODR_BUSINESS_DB_URL") or e("BUSINESS_DB_URL") or (
+                e("INTERNAL_DB_URL", "") if e("ENABLE_ACTIONS", "0") in ("1", "true", "True") else ""),
+            approval_log_path=e("APPROVAL_LOG_PATH", cls.approval_log_path),
+            demo_mode=e("ODR_DEMO_MODE", "0") == "1",
             checkpoint_path=e("ODR_CHECKPOINT_PATH", cls.checkpoint_path),
             daily_token_budget=int(e("ODR_DAILY_TOKEN_BUDGET", 0)),
             price_in_per_m=float(e("ODR_PRICE_IN_PER_M")) if e("ODR_PRICE_IN_PER_M") else None,

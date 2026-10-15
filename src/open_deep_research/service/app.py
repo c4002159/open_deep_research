@@ -6,6 +6,13 @@
     GET  /v1/tasks/{id}/events      Server-Sent Events (progress; resumable via Last-Event-ID)
     POST /v1/tasks/{id}/cancel
     POST /v1/tasks/{id}/approval    approve / reject a paused task (approvers only)
+    GET  /v1/me                     who am I: role, budget, today's usage
+    GET  /v1/approvals              tasks paused for confidential-data approval (approvers)
+    GET  /v1/refunds?view=mine|inbox|all, GET /v1/refunds/{id}
+    POST /v1/refunds/{id}/decision  sign / reject a refund proposal (role from the token; never your own)
+    POST /v1/refunds/{id}/reverse   reverse an applied refund within 24h (finance / director)
+    GET  /v1/audit                  refund events + data-access decisions (approvers, admins)
+    GET  /                          the web client (static/index.html)
     GET  /healthz, /metrics
 """
 
@@ -14,16 +21,20 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Optional
 
 import redis.asyncio as aioredis
 from redis.exceptions import RedisError
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from open_deep_research import refunds as RF
 from open_deep_research.service import store as S
 from open_deep_research.service.dashboard import DASHBOARD_HTML
 from open_deep_research.service.auth import AuthError, Authenticator
@@ -34,6 +45,17 @@ from open_deep_research.service.store import TaskStore
 from open_deep_research.service.worker import WorkerPool
 from open_deep_research.telemetry import estimate_cost
 
+logger = logging.getLogger(__name__)
+STATIC_DIR = Path(__file__).parent / "static"
+
+
+class RevalidatingStatic(StaticFiles):
+    """Always revalidate (ETag): after an upgrade people must not keep running last week's client."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 PUBLIC_FIELDS = ("id", "state", "question", "created_at", "updated_at", "result", "error", "awaiting", "attempts")
 
 
@@ -44,6 +66,57 @@ class TaskIn(BaseModel):
 class ApprovalIn(BaseModel):
     approved: bool
     note: str = Field(default="", max_length=500)
+
+
+class RefundDecisionIn(BaseModel):
+    approve: bool
+    note: str = Field(default="", max_length=500)
+
+
+class ReverseIn(BaseModel):
+    note: str = Field(default="", max_length=500)
+
+
+_STATUS_FOR = {"not_found": 404, "forbidden": 403, "conflict": 409, "invalid": 422}
+
+
+def _utc_iso(ts: str) -> Optional[str]:
+    """approvals.jsonl stamps local time with an offset; the refund events are UTC. Compare them in UTC."""
+    from datetime import datetime, timezone
+
+    try:
+        return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S%z").astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return None
+
+
+def read_data_audit(path: str, limit: int) -> list[dict]:
+    """Data-access approvals and triage refusals from the JSONL audit log (newest last in the file)."""
+    from collections import deque
+    from pathlib import Path
+
+    p = Path(path)
+    if not p.exists():
+        return []
+    items = []
+    with p.open(encoding="utf-8") as f:
+        for line in deque(f, maxlen=max(1, limit * 3)):
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            at = _utc_iso(r.get("ts", ""))
+            if not at:
+                continue
+            subject = str(r.get("thread_id", "")).split(":")[0]
+            if r.get("event") == "request_refused_by_triage":
+                items.append({"kind": "refused", "at": at, "actor": "triage", "role": "", "action": "refused",
+                              "note": r.get("reason", ""), "detail": str(r.get("request", ""))[:200], "user": subject})
+            elif "approved" in r:
+                items.append({"kind": "data_access", "at": at, "actor": r.get("reviewer", ""), "role": "",
+                              "action": "approved" if r["approved"] else "denied", "note": r.get("note", ""),
+                              "detail": str(r.get("query", ""))[:200], "user": subject})
+    return items
 
 
 def create_app(settings: Optional[Settings] = None, provider: Any = None, start_workers: bool = True) -> FastAPI:
@@ -59,6 +132,11 @@ def create_app(settings: Optional[Settings] = None, provider: Any = None, start_
         app.state.limiter = SlidingWindowLimiter(r, settings.prefix, settings.rate_limit_per_window, settings.rate_window_s)
         app.state.provider = provider or GraphProvider(settings)
         await app.state.provider.start()
+        if settings.business_db_url:
+            try:
+                await asyncio.to_thread(RF.ensure_schema, RF.sqlite_path(settings.business_db_url))
+            except Exception as e:  # noqa: BLE001 - the refund endpoints will report the problem per request
+                logger.error("could not prepare the refund tables: %s", e)
         app.state.runner = TaskRunner(app.state.store, app.state.provider, settings)
         app.state.pool = WorkerPool(app.state.store, app.state.runner, settings)
         if start_workers:
@@ -88,6 +166,13 @@ def create_app(settings: Optional[Settings] = None, provider: Any = None, start_
 
     async def metric(request: Request, name: str, n: int = 1) -> None:
         await request.app.state.redis.hincrby(f"{settings.prefix}metrics", name, n)
+
+    async def metric_quiet(request: Request, name: str) -> None:
+        """Counters must never fail a business operation that has already been committed."""
+        try:
+            await metric(request, name)
+        except Exception:  # noqa: BLE001
+            logger.warning("could not record metric %s", name)
 
     def is_approver(user: str, task: dict) -> bool:
         return user in settings.approvers or (settings.owner_can_approve and user == task["owner"])
@@ -273,6 +358,120 @@ def create_app(settings: Optional[Settings] = None, provider: Any = None, start_
         return {"day": day, "totals": {**totals, "est_cost_usd": cost_of(totals)}, "users": users, "tools": tools,
                 "latency": await st.latency_hist(), "counters": {k.decode(): int(v) for k, v in sorted(raw.items())},
                 "queue_depth": await request.app.state.redis.llen(st.queue_key)}
+
+    # ------------------------------------------------------------ identity, approvals, refunds
+    def role_of(user: str) -> Optional[str]:
+        return settings.roles.get(user)
+
+    def biz_path() -> str:
+        if not settings.business_db_url:
+            raise HTTPException(404, "the refund workflow is not enabled")
+        try:
+            return RF.sqlite_path(settings.business_db_url)
+        except ValueError as e:
+            raise HTTPException(503, str(e))
+
+    def raise_for(out: RF.Outcome) -> None:
+        if not out.ok:
+            raise HTTPException(_STATUS_FOR.get(out.code, 400), out.message)
+
+    @app.get("/v1/me")
+    async def me(request: Request, user: str = Depends(current_user)):
+        st: TaskStore = request.app.state.store
+        t = await st.usage_day(user, utc_day())
+        spent = t.get("tokens_in", 0) + t.get("tokens_out", 0)
+        budget = settings.daily_token_budget or None
+        return {"user": user, "role": role_of(user), "is_admin": user in settings.admins,
+                "can_approve_data": user in settings.approvers, "actions_enabled": bool(settings.business_db_url),
+                "budget": {"daily_tokens": budget, "used": spent, "remaining": None if budget is None else max(0, budget - spent)},
+                "today": {**t, "est_cost_usd": cost_of(t)}}
+
+    @app.get("/v1/approvals")
+    async def pending_data_approvals(request: Request, user: str = Depends(current_user)):
+        st: TaskStore = request.app.state.store
+        if user not in settings.approvers:
+            return {"tasks": []}
+        out = []
+        for raw in await st.r.smembers(f"{settings.prefix}awaiting"):
+            task = await st.get(raw.decode() if isinstance(raw, bytes) else raw)
+            if task and task["state"] == S.AWAITING and is_approver(user, task):
+                out.append({**public(task), "owner": task["owner"]})
+        out.sort(key=lambda t: t["updated_at"])
+        return {"tasks": out}
+
+    @app.get("/v1/refunds")
+    async def list_refunds(view: str = "mine", status: Optional[str] = None, user: str = Depends(current_user)):
+        path, role = biz_path(), role_of(user)
+        if view == "mine":
+            rows = await asyncio.to_thread(lambda: RF.list_refunds(path, status=status, requested_by=user))
+        elif view == "inbox":
+            rows = [] if not role else [r for r in await asyncio.to_thread(lambda: RF.list_refunds(path, awaiting_role=role))
+                                        if r["requested_by"] != user]
+        elif view == "all":
+            if not (role or user in settings.admins):
+                raise HTTPException(403, "approvers and admins only")
+            rows = await asyncio.to_thread(lambda: RF.list_refunds(path, status=status))
+        else:
+            raise HTTPException(422, "view must be mine, inbox or all")
+        return {"refunds": rows}
+
+    @app.get("/v1/refunds/{refund_id}")
+    async def get_refund(refund_id: int, user: str = Depends(current_user)):
+        r = await asyncio.to_thread(RF.get, biz_path(), refund_id)
+        if not r or not (r["requested_by"] == user or role_of(user) or user in settings.admins):
+            raise HTTPException(404, "refund not found")        # 404, not 403: do not reveal that the id exists
+        return r
+
+    @app.post("/v1/refunds/{refund_id}/decision")
+    async def decide_refund(refund_id: int, body: RefundDecisionIn, request: Request, user: str = Depends(current_user)):
+        path, role = biz_path(), role_of(user)
+        if role is None:
+            raise HTTPException(403, "you do not hold an approver role")
+        # actor and role come from the token; nothing in the body (or in anything the model wrote) can change them
+        out = await asyncio.to_thread(lambda: RF.decide(path, refund_id=refund_id, user=user, role=role,
+                                                         approve=body.approve, note=body.note))
+        raise_for(out)
+        await metric_quiet(request, "refund_signed" if body.approve else "refund_rejected")
+        if out.refund["status"] == "applied":
+            await metric_quiet(request, "refund_applied")
+        return out.refund
+
+    @app.post("/v1/refunds/{refund_id}/reverse")
+    async def reverse_refund(refund_id: int, body: ReverseIn, request: Request, user: str = Depends(current_user)):
+        path, role = biz_path(), role_of(user)
+        if role is None:
+            raise HTTPException(403, "you do not hold an approver role")
+        out = await asyncio.to_thread(lambda: RF.reverse(path, refund_id=refund_id, user=user, role=role, note=body.note))
+        raise_for(out)
+        await metric_quiet(request, "refund_reversed")
+        return out.refund
+
+    @app.get("/v1/audit")
+    async def audit_feed(limit: int = 100, user: str = Depends(current_user)):
+        if not (role_of(user) or user in settings.admins):
+            raise HTTPException(403, "approvers and admins only")
+        limit = max(1, min(limit, 300))
+        items: list[dict] = []
+        if settings.business_db_url:
+            for e in await asyncio.to_thread(RF.audit_trail, biz_path(), limit):
+                items.append({"kind": "refund", "at": e["at"], "actor": e["actor"], "role": e["role"], "action": e["action"],
+                              "note": e["note"], "refund_id": e["refund_id"], "order_id": e["order_id"], "amount": e["amount"]})
+        items += await asyncio.to_thread(read_data_audit, settings.approval_log_path, limit)
+        items.sort(key=lambda x: x["at"], reverse=True)
+        return {"items": items[:limit]}
+
+    if settings.demo_mode:
+        @app.get("/demo/users")
+        async def demo_users():
+            """Demo only: lists the sample accounts and their tokens so the UI can switch persona. Never enable in production."""
+            return {"users": [{"user": u, "role": role_of(u), "key": k} for k, u in settings.api_keys.items()]}
+
+    # the web client: three static files, no build step
+    app.mount("/static", RevalidatingStatic(directory=STATIC_DIR), name="static")
+
+    @app.get("/", include_in_schema=False)
+    async def index():
+        return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
     @app.get("/dashboard", response_class=HTMLResponse)
     async def dashboard():

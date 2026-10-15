@@ -29,7 +29,19 @@ curl -N localhost:8080/v1/tasks/<id>/events -H "Authorization: Bearer key-alice"
 | `GET /v1/tasks/{id}/events` | Server-Sent Events: `queued, progress, approval_required, approval_decided, resumed, requeued, continued, succeeded/failed/cancelled, end`. Resume with `Last-Event-ID` |
 | `POST /v1/tasks/{id}/cancel` | queued/paused tasks cancel at once; a running task is stopped by its worker |
 | `POST /v1/tasks/{id}/approval` | `{"approved": true, "note": "..."}` — approvers only (`ODR_APPROVERS`). The reviewer recorded is the token's user, never a body field |
+| `GET /v1/tasks/{id}/events` (live) | besides the events above, `tool_start`, `tool_end` and `usage` stream while a task runs (tool arguments, success, seconds; running token totals). Query *results* are never streamed; only `propose_refund`/`withdraw_refund` results are, because they contain no business data |
+| `GET /v1/me` | who am I: role, admin flag, today's tokens, budget remaining |
+| `GET /v1/approvals` | tasks paused for confidential-data approval, with the SQL to be approved (approvers only) |
+| `GET /v1/refunds?view=mine\|inbox\|all`, `GET /v1/refunds/{id}` | refund proposals: my own / waiting for my role to sign / everything (role holders and admins). Someone else's refund is `404` |
+| `POST /v1/refunds/{id}/decision` | `{"approve": bool, "note": "..."}`. Actor **and role** come from the token. `403` own request (separation of duties) or wrong role · `409` already decided / already signed · `422` rejecting without a reason |
+| `POST /v1/refunds/{id}/reverse` | finance or director, within 24 h of the refund taking effect, reason required |
+| `GET /v1/audit?limit=` | refund events + data-access decisions + triage refusals, newest first, in UTC (role holders and admins) |
+| `GET /` | the web client (`static/`); `GET /demo/users` exists **only** with `ODR_DEMO_MODE=1` |
 | `GET /healthz`, `GET /metrics` | Redis ping + worker count; plain-text counters |
+
+The refund endpoints exist when `ODR_BUSINESS_DB_URL` (or, with `ENABLE_ACTIONS=1`, `INTERNAL_DB_URL`) is a SQLite URL.
+Roles are `ODR_ROLES="bob=manager,carol=finance,dave=director"`. The design and its trade-offs are in
+[nl_operations_design.md](nl_operations_design.md); the 3-minute walk-through is [demo_script.md](demo_script.md).
 
 ## How the pieces work
 

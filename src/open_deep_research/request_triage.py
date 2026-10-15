@@ -68,11 +68,18 @@ def classify_request(text: str) -> Optional[str]:
     return None
 
 
-def refusal_message(reason: str, text: str) -> str:
+_ACTION_HINT_ZH = "如果是要退款，请直接告诉我订单号和原因，我会生成一份待审批的退款申请，由有权限的人审批后才会生效。"
+_ACTION_HINT_EN = ("If you want a refund, tell me the order id and the reason: I will create a refund proposal "
+                   "that the right approvers must sign before anything changes.")
+
+
+def refusal_message(reason: str, text: str, actions_enabled: bool = False) -> str:
     what_zh = {"data_mutation": "修改、删除或新增数据", "bulk_export": "批量导出机密明细数据",
                "prompt_injection": "绕过既有的安全规则"}[reason]
     what_en = {"data_mutation": "modify, delete or insert data", "bulk_export": "bulk-export confidential detail",
                "prompt_injection": "bypass the existing safety rules"}[reason]
-    if re.search(r"[一-鿿]", text):
-        return _REFUSAL_ZH.format(what=what_zh)
-    return _REFUSAL_EN.format(what=what_en)
+    zh = bool(re.search(r"[一-鿿]", text))
+    msg = _REFUSAL_ZH.format(what=what_zh) if zh else _REFUSAL_EN.format(what=what_en)
+    if actions_enabled and reason == "data_mutation":
+        msg += " " + (_ACTION_HINT_ZH if zh else _ACTION_HINT_EN)
+    return msg
