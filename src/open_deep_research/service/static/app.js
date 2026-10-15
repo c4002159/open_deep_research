@@ -61,6 +61,8 @@ const ago = (sec) => { const s = Math.max(0, Date.now() / 1000 - sec); return s 
 
 /* the approval policy's reason text comes from the server in English; show the common case in Chinese */
 const zhReason = (r) => String(r || "").replace(
+  /^Cumulative row-level order reads in this task: this query raises the total to up to (\d+) individual orders \(more than (\d+) without approval\)$/,
+  (m, total, limit) => `本次任务累计读取的逐单明细将达到最多 ${total} 条，超过无需审批的 ${limit} 条（防止用 LIMIT 分批取走明细）`).replace(
   /^Row-level order data \(confidential per the data-permission policy\): the query returns individual orders from (\S+) — (all matching rows|up to (\d+) rows)$/,
   (m, table, rows, n) => `机密级逐单明细（数据权限规范）：查询会返回 ${table} 表中的单笔订单，${n ? "最多 " + n + " 行" : "全部匹配的行"}`) || "该查询会返回机密级的单笔订单明细";
 
