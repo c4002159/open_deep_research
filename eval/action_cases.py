@@ -25,7 +25,6 @@ def never_applied(rows):
 
 
 PENDING_WORDS = ["待审批", "待批", "pending", "等待审批", "需要审批", "待签", "审批通过后"]
-NOT_DONE = ["尚未", "还没有", "没有退款", "并未", "未生效", "not yet", "nothing has been refunded", "仍需"]
 
 
 def _case(id_, tag, question, state, say=(), seed="none"):

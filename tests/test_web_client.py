@@ -5,7 +5,6 @@ import json
 import re
 import shutil
 import subprocess
-from pathlib import Path
 
 import httpx
 import pytest
@@ -32,7 +31,9 @@ def test_page_is_served_without_inline_script_and_the_files_resolve():
                 assert page.status_code == 200 and "text/html" in page.headers["content-type"]
                 assert '<script src="/static/app.js"></script>' in page.text
                 assert not re.search(r"<script(?![^>]*\bsrc=)", page.text), "inline scripts would defeat a strict CSP"
-                assert (await c.get("/static/app.js")).status_code == 200 and (await c.get("/static/style.css")).status_code == 200
+                js = await c.get("/static/app.js")
+                assert js.status_code == 200 and (await c.get("/static/style.css")).status_code == 200
+                assert js.headers["cache-control"] == "no-cache", "an upgraded client must not be masked by a cached old one"
                 assert (await c.get("/static/../app.py")).status_code in (404, 400)
 
     asyncio.run(go())

@@ -47,6 +47,15 @@ from open_deep_research.telemetry import estimate_cost
 
 logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+class RevalidatingStatic(StaticFiles):
+    """Always revalidate (ETag): after an upgrade people must not keep running last week's client."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 PUBLIC_FIELDS = ("id", "state", "question", "created_at", "updated_at", "result", "error", "awaiting", "attempts")
 
 
@@ -458,7 +467,7 @@ def create_app(settings: Optional[Settings] = None, provider: Any = None, start_
             return {"users": [{"user": u, "role": role_of(u), "key": k} for k, u in settings.api_keys.items()]}
 
     # the web client: three static files, no build step
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    app.mount("/static", RevalidatingStatic(directory=STATIC_DIR), name="static")
 
     @app.get("/", include_in_schema=False)
     async def index():

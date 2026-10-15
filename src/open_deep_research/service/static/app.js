@@ -56,7 +56,13 @@ const fmt = (n) => (n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e4 ? String(Ma
 const money = (v) => (v === null || v === undefined ? "" : "$" + Number(v).toFixed(4));
 const yuan = (v) => "¥" + Number(v).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const when = (iso) => { const d = typeof iso === "number" ? new Date(iso * 1000) : new Date(iso); return isNaN(d) ? "" : d.toLocaleString("zh-CN", { hour12: false }); };
+const whenShort = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleString("zh-CN", { hour12: false, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }); };
 const ago = (sec) => { const s = Math.max(0, Date.now() / 1000 - sec); return s < 60 ? "刚刚" : s < 3600 ? Math.floor(s / 60) + " 分钟前" : s < 86400 ? Math.floor(s / 3600) + " 小时前" : Math.floor(s / 86400) + " 天前"; };
+
+/* the approval policy's reason text comes from the server in English; show the common case in Chinese */
+const zhReason = (r) => String(r || "").replace(
+  /^Row-level order data \(confidential per the data-permission policy\): the query returns individual orders from (\S+) — (all matching rows|up to (\d+) rows)$/,
+  (m, table, rows, n) => `机密级逐单明细（数据权限规范）：查询会返回 ${table} 表中的单笔订单，${n ? "最多 " + n + " 行" : "全部匹配的行"}`) || "该查询会返回机密级的单笔订单明细";
 
 function toast(msg) {
   const t = h("div", { class: "toast", role: "status", text: msg });
@@ -273,8 +279,7 @@ function addTurn(task) {
   $("#turns").append(turn.root);
   state.turns.set(task.id, turn);
   turn.root.scrollIntoView({ behavior: "smooth", block: "end" });
-  if (TASK_TERMINAL.has(task.state)) { turn.activity.hidden = true; finishTurn(turn); }
-  else streamTurn(turn);
+  streamTurn(turn);          // finished tasks replay their stored events, so the process view is there for history too
   return turn;
 }
 
@@ -288,7 +293,8 @@ function markSteps(turn, finished, all = false) {
 function setChip(turn, st) { turn.chip.className = "state " + st; turn.chip.textContent = TASK_LABEL[st] || st; turn.stop.hidden = TASK_TERMINAL.has(st); }
 function updateTurnMeta(turn) {
   const tok = turn.tokens.in + turn.tokens.out;
-  turn.meta.textContent = [tok ? `${fmt(tok)} tokens` : "", turn.toolCount ? `${turn.toolCount} 次工具调用` : "", `${Math.round((Date.now() - turn.t0) / 1000)} 秒`].filter(Boolean).join(" · ");
+  const secs = turn.durationS !== undefined ? turn.durationS : Math.round((Date.now() - turn.t0) / 1000);
+  turn.meta.textContent = [tok ? `${fmt(tok)} tokens` : "", turn.toolCount ? `${turn.toolCount} 次工具调用` : "", `${secs} 秒`].filter(Boolean).join(" · ");
   turn.activityTitle.textContent = turn.toolCount ? `过程 · ${turn.toolCount} 次工具调用` : "过程";
 }
 
@@ -324,7 +330,7 @@ function onEvent(turn, type, d) {
     setChip(turn, "awaiting_approval");
     turn.awaiting.hidden = false;
     turn.awaiting.replaceChildren(h("b", { text: "等待数据访问审批：" }),
-      ...(d.requests || []).map((r) => h("div", { text: r.reason || "该查询会返回机密级的单笔订单明细" })),
+      ...(d.requests || []).map((r) => h("div", { text: zhReason(r.reason) })),
       h("div", { class: "hint", text: "需要有审批权限的同事在「待处理」里批准或拒绝，批准后任务会自动继续，不会重做已完成的步骤。" }));
   } else if (type === "approval_decided" || type === "resumed") {
     turn.awaiting.hidden = true; setChip(turn, "running");
@@ -384,6 +390,7 @@ async function finishTurn(turn) {
     if (t.result && t.result.report) turn.report.innerHTML = md(t.result.report);
     else if (t.error) turn.report.append(h("div", { class: "err-text", text: "任务失败：" + t.error }));
     if (t.usage) { turn.tokens = { in: t.usage.tokens_in || 0, out: t.usage.tokens_out || 0 }; turn.toolCount = t.usage.tool_calls || turn.toolCount; }
+    if (TASK_TERMINAL.has(t.state)) turn.durationS = Math.max(0, Math.round(t.updated_at - t.created_at));
     updateTurnMeta(turn);
     state.taskTokens.delete(turn.id);
     await showRefundsFor(turn);
@@ -517,7 +524,7 @@ function dataApprovalCard(t) {
   const reqs = (t.awaiting && t.awaiting.requests) || [];
   return h("div", { class: "da" },
     h("div", {}, h("b", { text: t.owner }), " 想要：", h("span", { text: t.question })),
-    ...reqs.map((r) => h("div", {}, h("div", { class: "hint", text: r.reason }), h("pre", {}, h("code", { text: String((r.args && r.args.query) || "") })))),
+    ...reqs.map((r) => h("div", {}, h("div", { class: "hint", text: zhReason(r.reason) }), h("pre", {}, h("code", { text: String((r.args && r.args.query) || "") })))),
     h("div", { class: "rf" }, h("div", { class: "actions" }, note,
       h("button", { class: "btn ok", text: "批准访问", onclick: () => decide(true) }), h("button", { class: "btn bad", text: "拒绝", onclick: () => decide(false) }))));
 }
@@ -533,8 +540,8 @@ async function renderAudit() {
     const detail = (i) => i.kind === "refund" ? `退款 #${i.refund_id} · 订单 #${i.order_id} · ${yuan(i.amount)}` : (i.user ? i.user + "：" : "") + (i.detail || "");
     box.replaceChildren(h("table", { class: "audit" },
       h("thead", {}, h("tr", {}, ["时间", "类型", "操作人", "动作", "内容", "备注"].map((x) => h("th", { text: x })))),
-      h("tbody", {}, items.map((i) => h("tr", {}, h("td", { text: when(i.at) }), h("td", {}, h("span", { class: "kind " + i.kind, text: kindLabel[i.kind] || i.kind })),
-        h("td", { text: i.actor + (i.role ? `（${ROLE_LABEL[i.role]}）` : "") }), h("td", { text: actionLabel[i.action] || i.action }), h("td", {}, h("code", { text: detail(i) })), h("td", { text: ({ "all required signatures present": "所需签字已齐" })[i.note] || i.note || "" }))))));
+      h("tbody", {}, items.map((i) => h("tr", {}, h("td", { class: "nw", text: whenShort(i.at) }), h("td", { class: "nw" }, h("span", { class: "kind " + i.kind, text: kindLabel[i.kind] || i.kind })),
+        h("td", { class: "nw", text: i.actor + (i.role ? `（${ROLE_LABEL[i.role]}）` : "") }), h("td", { class: "nw", text: actionLabel[i.action] || i.action }), h("td", {}, h("code", { text: detail(i) })), h("td", { text: ({ "all required signatures present": "所需签字已齐" })[i.note] || i.note || "" }))))));
   } catch (e) {
     box.replaceChildren(h("div", { class: "empty", text: e.status === 403 ? "审计只对审批人和管理员开放。切换到 bob 或 root 看看。" : e.message }));
   }
@@ -545,6 +552,7 @@ function showTab(name) {
   state.tab = name;
   for (const b of document.querySelectorAll("nav.tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === name));
   for (const v of ["chat", "inbox", "audit"]) $("#view-" + v).hidden = v !== name;
+  $("main").classList.toggle("single", name !== "chat");          // the history list only belongs to the chat page
   if (name === "inbox") renderInbox();
   if (name === "audit") renderAudit();
 }

@@ -139,7 +139,7 @@ def _get_row(conn, refund_id: int) -> Optional[sqlite3.Row]:
 
 # ----------------------------------------------------------------------------- agent-facing
 def propose(path: str, *, order_id: int, amount: float, reason: str, outage_claim: bool, requested_by: str,
-            today: date, thread_id: str = "") -> Outcome:
+            today: date, thread_id: str = "", _retry: bool = True) -> Outcome:
     """Validate a refund request and, if it passes, store it as ``pending``. Never refunds anything."""
     if not requested_by or requested_by == "unknown":
         return Outcome(False, "no authenticated requester: refund proposals can only be made on behalf of a signed-in user")
@@ -192,9 +192,11 @@ def propose(path: str, *, order_id: int, amount: float, reason: str, outage_clai
             rid = cur.lastrowid
             _event(conn, rid, requested_by, "", "propose", reason)
             return Outcome(True, "proposal created", _shape(conn, _get_row(conn, rid)))
-    except sqlite3.IntegrityError:        # lost a race against an identical concurrent proposal
+    except sqlite3.IntegrityError:        # lost a race against an identical concurrent proposal: look again, once
+        if not _retry:
+            return Outcome(False, "could not create the proposal because of a conflicting change; please try again")
         return propose(path, order_id=order_id, amount=amount, reason=reason, outage_claim=outage_claim,
-                       requested_by=requested_by, today=today, thread_id=thread_id)
+                       requested_by=requested_by, today=today, thread_id=thread_id, _retry=False)
 
 
 def withdraw(path: str, *, refund_id: int, user: str) -> Outcome:

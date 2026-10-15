@@ -29,6 +29,7 @@ def demo_env(db_path: Path) -> dict[str, str]:
         "ODR_APPROVERS": "bob,carol,dave",
         "ODR_ADMINS": "root",
         "ODR_DEMO_MODE": "1",
+        "APPROVAL_LOG_PATH": "data/demo_approvals.jsonl",      # the demo's audit page must not mix with eval runs
         "ODR_DAILY_TOKEN_BUDGET": "400000",
         "ODR_RATE_LIMIT": "20",
         "ODR_MAX_ACTIVE": "4",
@@ -40,6 +41,7 @@ def prepare(reset: bool = False, source: str = "test.db") -> Path:
 
     if reset or not DEMO_DB.exists():
         D.build_demo_db(str(DEMO_DB), source=source, seed=True)
+        Path(demo_env(DEMO_DB)["APPROVAL_LOG_PATH"]).unlink(missing_ok=True)       # audit history belongs to the data it audits
     for k, v in demo_env(DEMO_DB).items():
         os.environ.setdefault(k, v)
     return DEMO_DB

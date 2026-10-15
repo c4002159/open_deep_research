@@ -58,7 +58,7 @@ async def propose_refund(order_id: int, amount: float, reason: str, service_outa
     Args:
         order_id: Id of the order in the sales table (verified against the database).
         amount: Amount to refund; at most the order's revenue.
-        reason: Why the customer is being refunded, in the user's words (max 300 characters).
+        reason: Why the customer is being refunded: the user's own words, verbatim, in the user's language - no translation or paraphrase (max 300 characters).
         service_outage_over_72h: True whenever the user states or reports an outage of more than 72 hours (approvers verify it).
         config: Runtime configuration (injected).
     """
