@@ -18,7 +18,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Optional
 
@@ -77,6 +79,74 @@ def approval_reason(tool_name: str, args: dict, row_limit: int = 10) -> Optional
     if tool_name == "sql_executor":
         return sql_approval_reason(str(args.get("query", "")), row_limit)
     return None
+
+
+def sql_row_cost(sql: str, dialect: Optional[str] = None) -> Optional[int]:
+    """Upper bound on individual-order rows a *bounded* row-level SELECT on a sensitive table can return.
+
+    ``None`` for anything else (aggregates, other tables, unparsable, or no LIMIT - which needs approval anyway).
+    Declared LIMITs are known before the query runs, so no result row has to be inspected.
+    """
+    try:
+        tree = sqlglot.parse_one(sql, read=dialect)
+    except SqlglotError:
+        return None
+    if not isinstance(tree, exp.Select):
+        return None
+    tables = {t.name.lower() for t in tree.find_all(exp.Table)}
+    if not tables & SENSITIVE_TABLES or _is_aggregated(tree):
+        return None
+    return _limit_value(tree)
+
+
+class RowBudget:
+    """Row-level rows read *without* approval, per task (thread).
+
+    The approval rule looks at one query's shape, so a model that always writes ``LIMIT 5`` could page through
+    the whole table five rows at a time. This adds up the declared LIMITs of a task's row-level queries; once the
+    total passes the per-query threshold the next one needs a human too. Charging is idempotent per tool-call id
+    (the gate node is replayed when a paused task resumes) and an approval resets the task's total.
+    Process-local: across several hosts each keeps its own count.
+    """
+
+    def __init__(self, max_threads: int = 2000) -> None:
+        self._by_thread: "OrderedDict[str, dict[str, int]]" = OrderedDict()
+        self._max, self._lock = max_threads, threading.Lock()
+
+    def charge(self, thread_id: str, call_id: str, cost: int) -> int:
+        with self._lock:
+            calls = self._by_thread.setdefault(thread_id, {})
+            self._by_thread.move_to_end(thread_id)
+            calls.setdefault(call_id, cost)
+            while len(self._by_thread) > self._max:
+                self._by_thread.popitem(last=False)
+            return sum(calls.values())
+
+    def reset(self, thread_id: str) -> None:
+        with self._lock:
+            self._by_thread.pop(thread_id, None)
+
+
+ROW_BUDGET = RowBudget()
+
+
+def collect_pending(tool_calls: list[dict], *, row_limit: int, thread_id: str, budget: RowBudget = ROW_BUDGET) -> list[dict]:
+    """Approval requests for a batch of tool calls: the per-query rule plus the per-task running total."""
+    pending = []
+    for tc in tool_calls:
+        reason = approval_reason(tc["name"], tc["args"], row_limit)
+        cumulative = False
+        if not reason and tc["name"] == "sql_executor":
+            cost = sql_row_cost(str(tc["args"].get("query", "")))
+            if cost:
+                total = budget.charge(thread_id, tc["id"], cost)
+                if total > row_limit:
+                    cumulative = True
+                    reason = (f"Cumulative row-level order reads in this task: this query raises the total to up to {total} "
+                              f"individual orders (more than {row_limit} without approval)")
+        if reason:
+            pending.append({"tool": tc["name"], "args": tc["args"], "reason": reason, "id": tc["id"], "cumulative": cumulative})
+    return pending
 
 
 def audit(path: str, record: dict) -> None:

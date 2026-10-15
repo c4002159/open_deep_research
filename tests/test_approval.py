@@ -140,3 +140,89 @@ def test_no_checkpointer_fails_closed(monkeypatch, tmp_path):
     e = Env(monkeypatch, tmp_path, with_checkpointer=False)
     e.run(e.graph.ainvoke(e.state("SELECT * FROM sales"), e.cfg("t7")))
     assert e.executed == [], "cannot pause -> must deny, never silently execute"
+
+
+# ------------------------------------------------------------------ cumulative row-level reads (LIMIT slicing)
+from open_deep_research.approval import RowBudget, collect_pending, sql_row_cost  # noqa: E402
+
+
+def _call(i, sql):
+    return {"id": f"c{i}", "name": "sql_executor", "args": {"query": sql}}
+
+
+@pytest.mark.parametrize("sql,cost", [
+    ("SELECT * FROM sales WHERE id = 80 LIMIT 1", 1),
+    ("SELECT * FROM sales LIMIT 5", 5),
+    ("SELECT * FROM sales LIMIT 5 OFFSET 5", 5),
+    ("SELECT * FROM sales", None),                              # unbounded: needs approval by the per-query rule
+    ("SELECT region, SUM(revenue) FROM sales GROUP BY region", None),
+    ("SELECT COUNT(*) FROM sales", None),
+    ("SELECT * FROM products LIMIT 5", None),                   # not a sensitive table
+    ("not sql at all", None),
+])
+def test_row_cost_is_the_declared_limit_of_a_bounded_row_level_query(sql, cost):
+    assert sql_row_cost(sql) == cost
+
+
+def test_slicing_the_table_five_rows_at_a_time_is_caught_on_the_third_slice():
+    b = RowBudget()
+    kw = dict(row_limit=10, thread_id="t1", budget=b)
+    assert collect_pending([_call(1, "SELECT * FROM sales LIMIT 5")], **kw) == []
+    assert collect_pending([_call(2, "SELECT * FROM sales LIMIT 5 OFFSET 5")], **kw) == []         # total 10: still within the limit
+    third = collect_pending([_call(3, "SELECT * FROM sales LIMIT 5 OFFSET 10")], **kw)
+    assert len(third) == 1 and third[0]["cumulative"] and "up to 15" in third[0]["reason"]
+
+
+def test_parallel_calls_in_one_batch_are_added_up_too():
+    pend = collect_pending([_call(i, "SELECT * FROM sales LIMIT 5") for i in range(3)], row_limit=10, thread_id="t", budget=RowBudget())
+    assert [p["id"] for p in pend] == ["c2"]
+
+
+def test_replaying_the_gate_after_a_pause_does_not_double_count():
+    b = RowBudget()
+    batch = [_call(1, "SELECT * FROM sales LIMIT 5"), _call(2, "SELECT * FROM sales LIMIT 5")]
+    assert collect_pending(batch, row_limit=10, thread_id="t", budget=b) == []
+    assert collect_pending(batch, row_limit=10, thread_id="t", budget=b) == []                     # same call ids: same total
+
+
+def test_an_approval_resets_the_count_and_tasks_are_independent():
+    b = RowBudget()
+    big = [_call(i, "SELECT * FROM sales LIMIT 6") for i in (1, 2)]
+    assert len(collect_pending(big, row_limit=10, thread_id="a", budget=b)) == 1
+    assert collect_pending([_call(9, "SELECT * FROM sales LIMIT 6")], row_limit=10, thread_id="other", budget=b) == []
+    b.reset("a")
+    assert collect_pending([_call(10, "SELECT * FROM sales LIMIT 6")], row_limit=10, thread_id="a", budget=b) == []
+
+
+def test_aggregates_and_single_order_lookups_are_never_a_nuisance():
+    b = RowBudget()
+    aggs = [_call(i, "SELECT region, SUM(revenue) FROM sales GROUP BY region") for i in range(30)]
+    assert collect_pending(aggs, row_limit=10, thread_id="t", budget=b) == []
+    lookups = [_call(100 + i, f"SELECT * FROM sales WHERE id = {i} LIMIT 1") for i in range(10)]
+    assert collect_pending(lookups, row_limit=10, thread_id="t", budget=b) == []                   # ten single-order lookups
+    assert len(collect_pending([_call(200, "SELECT * FROM sales WHERE id = 11 LIMIT 1")], row_limit=10, thread_id="t", budget=b)) == 1
+
+
+def test_unbounded_queries_still_use_the_per_query_rule_and_do_not_charge_the_budget():
+    b = RowBudget()
+    pend = collect_pending([_call(1, "SELECT * FROM sales")], row_limit=10, thread_id="t", budget=b)
+    assert len(pend) == 1 and not pend[0]["cumulative"] and "all matching rows" in pend[0]["reason"]
+    assert b.charge("t", "x", 1) == 1
+
+
+def test_the_budget_forgets_old_tasks_instead_of_growing_forever():
+    b = RowBudget(max_threads=3)
+    for i in range(10):
+        b.charge(f"t{i}", "c", 1)
+    assert len(b._by_thread) == 3
+
+
+def test_slicing_through_the_real_node_pauses_the_whole_batch_before_anything_runs(env):
+    calls = [{"name": "sql_executor", "args": {"query": f"SELECT * FROM sales LIMIT 5 OFFSET {5 * i}"}, "id": f"s{i}"} for i in range(3)]
+    state = {"researcher_messages": [AIMessage(content="", tool_calls=calls)], "researcher_type": "data_analyst", "research_topic": "t"}
+    out = env.run(env.graph.ainvoke(state, env.cfg("slice-1")))
+    assert out.get("__interrupt__") and env.executed == []
+    req = out["__interrupt__"][0].value["requests"]
+    assert [r["id"] for r in req] == ["s2"] and req[0]["cumulative"]
+    env.run(env.graph.ainvoke(Command(resume={"approved": True, "reviewer": "bob"}), env.cfg("slice-1")))
+    assert len(env.executed) == 3, "each query runs exactly once after approval"

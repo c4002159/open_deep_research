@@ -25,7 +25,7 @@ from open_deep_research.configuration import (
 from open_deep_research.model_fallback import ainvoke_with_fallback
 from open_deep_research.citation_check import cited_documents, footer as citation_footer, verify_citations
 from open_deep_research.kb_retrieval import load_corpus
-from open_deep_research.approval import approval_reason, audit, decide
+from open_deep_research.approval import ROW_BUDGET, audit, collect_pending, decide
 from open_deep_research.request_triage import classify_request, refusal_message
 from open_deep_research.policy import fatal_denial, is_fatal_denial
 from open_deep_research.schema_context import schema_prompt_block
@@ -549,11 +549,8 @@ async def researcher_tools(state: ResearcherState, config: RunnableConfig) -> Co
     tool_calls = most_recent_message.tool_calls
     # Human approval gate: decided for the whole batch *before* any tool runs, so a pause
     # (interrupt) leaves no side effects and this node can be replayed on resume.
-    pending = [
-        {"tool": tc["name"], "args": tc["args"], "reason": reason, "id": tc["id"]}
-        for tc in tool_calls
-        if (reason := approval_reason(tc["name"], tc["args"], configurable.approval_row_limit))
-    ]
+    thread_id = str(config.get("configurable", {}).get("thread_id", ""))
+    pending = collect_pending(tool_calls, row_limit=configurable.approval_row_limit, thread_id=thread_id)
     rejected_ids: dict[str, str] = {}
     if pending:
         decision = decide(
@@ -561,6 +558,8 @@ async def researcher_tools(state: ResearcherState, config: RunnableConfig) -> Co
             thread_id=str(config.get("configurable", {}).get("thread_id", "")),
             log_path=configurable.approval_log_path, interrupt_fn=interrupt,
         )
+        if decision["approved"]:
+            ROW_BUDGET.reset(thread_id)               # a human has accepted the reads so far: start counting again
         if not decision["approved"]:
             note = decision.get("note") or "no reason given"
             rejected_ids = {p["id"]: f"Access to confidential order detail was not approved ({note})" for p in pending}
