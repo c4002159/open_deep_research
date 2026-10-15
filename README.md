@@ -141,7 +141,7 @@ curl -X POST localhost:8080/v1/tasks/<id>/approval -H "Authorization: Bearer dem
 ## 测试与评测
 
 ```bash
-pytest tests -q                               # 需要 Redis(6390)；连不上时相关测试自动跳过
+pytest tests -q                               # 需要 Redis(6390)、Docker；连不上时相关测试自动跳过。Redis + Docker 都在时 403 通过、0 跳过
 python -m eval.run_agent_eval --name demo --dry-run          # 不调模型，只验证评测流水线
 python -m eval.run_agent_eval --name full --concurrency 3    # 61 条完整评测，会消耗 LLM token
 python -m eval.compare eval/baselines/final61.json eval/results/full.json   # 与基线对比
@@ -162,7 +162,7 @@ python -m eval.service_loadtest               # 服务压测（假图，不含 L
 | 故障注入（离线模拟） | 随机 30% 失败时调用成功率 **64.9% → 97%**（超时重试） | 600 秒虚拟时间；模型限流场景 67% → 100% |
 | 混合检索 | Hit@1 **0.854 → 0.878**，MRR 0.919 → 0.935 | 41 条查询、38 个分块，提升有限 |
 | 业务操作评测 | **13/13（100%）**（13 条，按**库里的状态**打分） | 退款提案 / 规则拒绝 / 注入 / 越权用例；Agent 自己生效的退款数 **0**；平均 3.0 次工具调用、2.5 万 token。第一轮 11/13，评测发现提示词问题并修复后重跑，单次运行，见 `eval/baselines/actions_final.json` |
-| 读路径不退化 | 开启业务操作后重跑 61 条：**54/61**，不依赖知识库的用例全部通过 | 7 条失败**全部**因为本机知识库（Postgres）起不来、检索工具熔断（4 条 `kb_*`、3 条需要提成规范的 `comm_*`），回答都是"未能检索到"；**知识库相关用例需在知识库可用的环境重跑才能下结论**，结果见 `eval/baselines/read61_actions_on_kb_down.json`（对照：此前基线 60/61） |
+| 读路径不退化 | 开启业务操作后重跑 61 条：第一次 54/61，**7 条失败全部是当时知识库（Postgres）没起来**；起来后只重跑这 7 条，**7/7 通过**（两次运行合计 61/61，对照此前基线 60/61） | 同一批用例分两次运行，不是一次完整的 61 条；结果见 `eval/baselines/read61_actions_on_kb_down.json` 与 `read61_kb_rerun.json` |
 | 服务压测 | 228 次提交/秒，P95 792ms；300 并发同 key 仅创建 1 个任务；杀掉全部 worker 后 100/100 任务完成 | 假图替代 LLM，**不是端到端吞吐**；投递为至少一次 |
 
 ## 限制
